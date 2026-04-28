@@ -257,6 +257,18 @@ alter table notifications       enable row level security;
 alter table waitlist            enable row level security;
 
 -- Políticas temporárias (abertas) — ajuste conforme autenticação
+drop policy if exists "allow_all_doctors"             on doctors;
+drop policy if exists "allow_all_patients"            on patients;
+drop policy if exists "allow_all_appointments"        on appointments;
+drop policy if exists "allow_all_medical_records"     on medical_records;
+drop policy if exists "allow_all_prescriptions"       on prescriptions;
+drop policy if exists "allow_all_patient_tags"        on patient_tags;
+drop policy if exists "allow_all_transactions"        on transactions;
+drop policy if exists "allow_all_inventory_items"     on inventory_items;
+drop policy if exists "allow_all_inventory_movements" on inventory_movements;
+drop policy if exists "allow_all_notifications"       on notifications;
+drop policy if exists "allow_all_waitlist"            on waitlist;
+
 create policy "allow_all_doctors"             on doctors             for all using (true) with check (true);
 create policy "allow_all_patients"            on patients            for all using (true) with check (true);
 create policy "allow_all_appointments"        on appointments        for all using (true) with check (true);
