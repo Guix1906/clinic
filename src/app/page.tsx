@@ -402,121 +402,159 @@ function statusBadge(s: string) {
    DASHBOARD SCREEN
 ───────────────────────────────────────── */
 function Dashboard({ onNavigateProntuario }: { onNavigateProntuario?: (patientId: string) => void }) {
-  const [appointments, setAppointments] = useState<Appointment[]>([]);
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [newPatients,  setNewPatients]  = useState(0);
-  const [loading, setLoading] = useState(true);
+  const [appointments,  setAppointments]  = useState<Appointment[]>([]);
+  const [transactions,  setTransactions]  = useState<Transaction[]>([]);
+  const [totalPatients, setTotalPatients] = useState(0);
+  const [newPtsWeek,    setNewPtsWeek]    = useState(0);
+  const [lowStock,      setLowStock]      = useState<InventoryItem[]>([]);
+  const [loading,       setLoading]       = useState(true);
 
-  useEffect(() => {
+  const load = () => {
     const today = todayISO();
     const { start, end } = weekRange();
-
+    setLoading(true);
     Promise.all([
-      supabase.from('appointments')
-        .select('*, patients(id, name, insurance)')
-        .eq('date', today)
-        .order('start_time'),
-      supabase.from('transactions')
-        .select('*')
-        .gte('date', start)
-        .lte('date', end),
-      supabase.from('patients')
-        .select('id', { count: 'exact', head: true })
-        .gte('created_at', today + 'T00:00:00'),
-    ]).then(([appt, txn, pts]) => {
+      supabase.from('appointments').select('*, patients(id,name,insurance)').eq('date', today).order('start_time'),
+      supabase.from('transactions').select('*').gte('date', start).lte('date', end),
+      supabase.from('patients').select('id', { count: 'exact', head: true }).eq('active', true),
+      supabase.from('patients').select('id', { count: 'exact', head: true }).gte('created_at', start + 'T00:00:00'),
+      supabase.from('inventory_items').select('*').eq('active', true).filter('quantity', 'lte', 'min_quantity'),
+    ]).then(([appt, txn, total, newPts, stock]) => {
       setAppointments((appt.data as Appointment[]) ?? []);
       setTransactions((txn.data as Transaction[]) ?? []);
-      setNewPatients(pts.count ?? 0);
+      setTotalPatients(total.count ?? 0);
+      setNewPtsWeek(newPts.count ?? 0);
+      // filter low stock client-side for accuracy
+      const allStock = (stock.data as InventoryItem[]) ?? [];
+      setLowStock(allStock.filter(i => i.quantity <= i.min_quantity));
       setLoading(false);
     });
-  }, []);
+  };
+
+  useEffect(() => { load(); }, []);
 
   if (loading) return <Spinner />;
 
-  const today = todayISO();
-  const confirmed   = appointments.filter(a => ['confirmado','agendado'].includes(a.status)).length;
-  const attended    = appointments.filter(a => a.status === 'concluido').length;
-  const totalAppt   = appointments.length;
-  const receitas    = transactions.filter(t => t.type === 'receita').reduce((s, t) => s + Number(t.amount), 0);
-  const despesas    = transactions.filter(t => t.type === 'despesa').reduce((s, t) => s + Number(t.amount), 0);
-  const saldo       = receitas - despesas;
+  const today      = todayISO();
+  const confirmed  = appointments.filter(a => ['confirmado','agendado'].includes(a.status)).length;
+  const attended   = appointments.filter(a => a.status === 'concluido').length;
+  const waiting    = appointments.filter(a => a.status === 'aguardando').length;
+  const totalAppt  = appointments.length;
+  const receitas   = transactions.filter(t => t.type === 'receita').reduce((s,t) => s + Number(t.amount), 0);
+  const despesas   = transactions.filter(t => t.type === 'despesa').reduce((s,t) => s + Number(t.amount), 0);
+  const saldo      = receitas - despesas;
+  const pendRec    = transactions.filter(t => t.type === 'receita' && t.status === 'pendente');
+  const pendDesp   = transactions.filter(t => t.type === 'despesa' && t.status === 'pendente');
+  const pendRecVal = pendRec.reduce((s,t) => s + Number(t.amount), 0);
+  const pendDespVal= pendDesp.reduce((s,t) => s + Number(t.amount), 0);
 
   const kpis = [
-    { label: 'Pacientes do Dia',       value: String(totalAppt),        sub: `${confirmed} confirmados`,          prog: totalAppt ? Math.round(confirmed / totalAppt * 100) : 0, color: '#0066D0', bg: '#EFF6FF', icon: 'user',      iconColor: '#0066D0' },
-    { label: 'Faturamento Previsto',   value: fmtCurrency(receitas),    sub: 'receitas da semana',                prog: 54,                                                      color: '#14B8A6', bg: '#F0FDFA', icon: 'dollar',    iconColor: '#14B8A6' },
-    { label: 'Atendimentos Realizados',value: String(attended),         sub: `de ${totalAppt} hoje`,              prog: totalAppt ? Math.round(attended / totalAppt * 100) : 0, color: '#10B981', bg: '#D1FAE5', icon: 'check',     iconColor: '#10B981' },
-    { label: 'Novos Pacientes',        value: String(newPatients),      sub: 'cadastrados hoje',                  prog: 25,                                                      color: '#FBBF24', bg: '#FEF3C7', icon: 'user-plus', iconColor: '#FBBF24' },
+    { label:'Pacientes do Dia',        value:String(totalAppt),       sub:`${confirmed} confirmados · ${waiting} aguardando`, prog:totalAppt?Math.round(confirmed/totalAppt*100):0, color:'#0066D0', bg:'#EFF6FF', icon:'user',      iconColor:'#0066D0' },
+    { label:'Faturamento da Semana',   value:fmtCurrency(receitas),   sub:`saldo ${fmtCurrency(saldo)}`,                      prog:receitas?Math.round((receitas-despesas)/receitas*100):0, color:'#14B8A6', bg:'#F0FDFA', icon:'dollar',    iconColor:'#14B8A6' },
+    { label:'Atendimentos Realizados', value:String(attended),        sub:`de ${totalAppt} agendados hoje`,                   prog:totalAppt?Math.round(attended/totalAppt*100):0,   color:'#10B981', bg:'#D1FAE5', icon:'check',     iconColor:'#10B981' },
+    { label:'Total de Pacientes',      value:String(totalPatients),   sub:`${newPtsWeek} novo${newPtsWeek!==1?'s':''} esta semana`, prog:Math.min(totalPatients,100),                 color:'#FBBF24', bg:'#FEF3C7', icon:'user-plus', iconColor:'#FBBF24' },
   ];
 
-  // Group transactions by weekday for bar chart
-  const days = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
+  const days   = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
+  const maxRec = Math.max(...days.map((_,i) => transactions.filter(t=>t.type==='receita'&&new Date(t.date+'T12:00:00').getDay()===i).reduce((s,t)=>s+Number(t.amount),0)),1);
   const barData = days.map((day, i) => {
-    const dayTxns = transactions.filter(t => new Date(t.date + 'T12:00:00').getDay() === i);
-    const rec  = dayTxns.filter(t => t.type === 'receita').reduce((s, t) => s + Number(t.amount), 0);
-    const desp = dayTxns.filter(t => t.type === 'despesa').reduce((s, t) => s + Number(t.amount), 0);
-    const max  = Math.max(...transactions.map(t => Number(t.amount)), 1);
-    return { day, rec: Math.round(rec / max * 100), desp: Math.round(desp / max * 100) };
+    const rec  = transactions.filter(t=>t.type==='receita'&&new Date(t.date+'T12:00:00').getDay()===i).reduce((s,t)=>s+Number(t.amount),0);
+    const desp = transactions.filter(t=>t.type==='despesa'&&new Date(t.date+'T12:00:00').getDay()===i).reduce((s,t)=>s+Number(t.amount),0);
+    return { day, rec, desp, recH:Math.round(rec/maxRec*100), despH:Math.round(desp/maxRec*100), active:new Date().getDay()===i };
   });
-
-  const pendRec  = transactions.filter(t => t.type === 'receita' && t.status === 'pendente');
-  const pendDesp = transactions.filter(t => t.type === 'despesa' && t.status === 'pendente');
-  const pendRecVal  = pendRec.reduce((s, t) => s + Number(t.amount), 0);
-  const pendDespVal = pendDesp.reduce((s, t) => s + Number(t.amount), 0);
 
   const avatarColors = ['#DBEAFE','#FEF3C7','#F0FDFA','#F3E8FF','#FEE2E2'];
   const avatarText   = ['#0066D0','#92400E','#0F766E','#7C3AED','#991B1B'];
 
+  const updateStatus = (id: string, status: string) =>
+    supabase.from('appointments').update({ status }).eq('id', id)
+      .then(() => setAppointments(prev => prev.map(x => x.id===id ? {...x,status} : x)));
+
+  // Alertas
+  const alerts: { icon: string; color: string; bg: string; text: string }[] = [];
+  if (waiting > 0) alerts.push({ icon:'user', color:'#0066D0', bg:'#EFF6FF', text:`${waiting} paciente${waiting>1?'s':''} aguardando atendimento` });
+  lowStock.forEach(i => alerts.push({ icon:'alert', color:'#EF4444', bg:'#FEF2F2', text:`Estoque baixo: ${i.name} (${i.quantity} ${i.unit??'un'})` }));
+  if (pendRecVal > 0) alerts.push({ icon:'dollar', color:'#FBBF24', bg:'#FEF3C7', text:`${pendRec.length} receita${pendRec.length>1?'s':''} pendente${pendRec.length>1?'s':''}: ${fmtCurrency(pendRecVal)}` });
+  if (pendDespVal > 0) alerts.push({ icon:'dollar', color:'#EF4444', bg:'#FEE2E2', text:`${pendDesp.length} despesa${pendDesp.length>1?'s':''} pendente${pendDesp.length>1?'s':''}: ${fmtCurrency(pendDespVal)}` });
+
   return (
-    <div style={{ flex: 1, overflowY: 'auto', padding: '20px 22px', background: '#F9FAFB', display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12 }}>
-        {kpis.map((k, i) => (
-          <Card key={i} style={{ padding: '14px 16px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
-              <span style={{ fontSize: 12, fontWeight: 500, color: '#6B7280' }}>{k.label}</span>
-              <div style={{ width: 30, height: 30, borderRadius: 7, background: k.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+    <div style={{ flex:1, overflowY:'auto', padding:'20px 22px', background:'#F9FAFB', display:'flex', flexDirection:'column', gap:14 }}>
+
+      {/* KPIs */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:12 }}>
+        {kpis.map((k,i) => (
+          <Card key={i} style={{ padding:'14px 16px' }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:10 }}>
+              <span style={{ fontSize:12, fontWeight:500, color:'#6B7280' }}>{k.label}</span>
+              <div style={{ width:30, height:30, borderRadius:7, background:k.bg, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
                 <Icon name={k.icon} size={15} color={k.iconColor} />
               </div>
             </div>
-            <div style={{ fontSize: k.value.startsWith('R$') ? 16 : 28, fontWeight: 700, color: '#111827', lineHeight: 1, marginBottom: 5 }}>{k.value}</div>
-            <div style={{ fontSize: 11, color: '#9CA3AF' }}>{k.sub}</div>
-            <div style={{ height: 5, background: '#F3F4F6', borderRadius: 9999, marginTop: 10, overflow: 'hidden' }}>
-              <div style={{ height: '100%', width: k.prog + '%', background: k.color, borderRadius: 9999 }} />
+            <div style={{ fontSize:k.value.startsWith('R$')?16:28, fontWeight:700, color:'#111827', lineHeight:1, marginBottom:5 }}>{k.value}</div>
+            <div style={{ fontSize:11, color:'#9CA3AF' }}>{k.sub}</div>
+            <div style={{ height:5, background:'#F3F4F6', borderRadius:9999, marginTop:10, overflow:'hidden' }}>
+              <div style={{ height:'100%', width:Math.max(0,Math.min(100,k.prog))+'%', background:k.color, borderRadius:9999 }} />
             </div>
           </Card>
         ))}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+      {/* Alertas — só aparece se houver algo */}
+      {alerts.length > 0 && (
+        <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+          {alerts.map((a,i) => (
+            <div key={i} style={{ display:'flex', alignItems:'center', gap:7, padding:'7px 12px', background:a.bg, borderRadius:8, border:`1px solid ${a.color}22`, flex:'0 0 auto', maxWidth:'100%' }}>
+              <Icon name={a.icon} size={13} color={a.color} />
+              <span style={{ fontSize:12, color:a.color, fontWeight:500 }}>{a.text}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14 }}>
+
+        {/* Fila de Atendimento */}
         <Card>
-          <div style={{ padding: '12px 16px', borderBottom: '1px solid #F3F4F6', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: 13, fontWeight: 600, color: '#111827' }}>Fila de Atendimento</span>
-            <span style={{ fontSize: 12, color: '#9CA3AF' }}>Hoje · {new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}</span>
+          <div style={{ padding:'12px 16px', borderBottom:'1px solid #F3F4F6', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+            <span style={{ fontSize:13, fontWeight:600, color:'#111827' }}>Fila de Atendimento</span>
+            <span style={{ fontSize:12, color:'#9CA3AF' }}>Hoje · {new Date().toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'})}</span>
           </div>
           {appointments.length === 0
-            ? <div style={{ padding: '24px 16px', textAlign: 'center', color: '#9CA3AF', fontSize: 13 }}>Nenhum agendamento hoje</div>
-            : appointments.slice(0, 6).map((a, i) => {
+            ? <div style={{ padding:'24px 16px', textAlign:'center', color:'#9CA3AF', fontSize:13 }}>Nenhum agendamento hoje</div>
+            : appointments.slice(0,6).map((a,i) => {
                 const name = a.patients?.name ?? 'Paciente';
-                const ini  = initials(name);
                 const col  = avatarColors[i % avatarColors.length];
                 const tc   = avatarText[i % avatarText.length];
+                const isDone = ['concluido','faltou','cancelado'].includes(a.status);
                 return (
-                  <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '9px 16px', borderBottom: i < appointments.length - 1 ? '1px solid #F9FAFB' : 'none' }}>
-                    <div style={{ width: 35, height: 35, borderRadius: '50%', background: col, color: tc, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, flexShrink: 0 }}>{ini}</div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: '#111827', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</div>
-                      <div style={{ fontSize: 11, color: '#9CA3AF' }}>{a.start_time?.slice(0,5)} · {a.type.replace('_',' ')}</div>
+                  <div key={a.id} style={{ display:'flex', alignItems:'center', gap:11, padding:'10px 16px', borderBottom:i<Math.min(appointments.length,6)-1?'1px solid #F9FAFB':'none', opacity:isDone?0.55:1 }}>
+                    <div style={{ width:36, height:36, borderRadius:'50%', background:col, color:tc, display:'flex', alignItems:'center', justifyContent:'center', fontSize:12, fontWeight:700, flexShrink:0 }}>{initials(name)}</div>
+                    <div style={{ flex:1, minWidth:0 }}>
+                      <div style={{ fontSize:13, fontWeight:600, color:'#111827', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{name}</div>
+                      <div style={{ fontSize:11, color:'#9CA3AF' }}>{a.start_time?.slice(0,5)} · {a.type.replace(/_/g,' ')}</div>
                     </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+                    <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:4 }}>
                       {statusBadge(a.status)}
-                      {a.status === 'aguardando' && (
-                        <div style={{ display: 'flex', gap: 4 }}>
-                          <button onClick={() => {
-                            supabase.from('appointments').update({ status: 'em_atendimento' }).eq('id', a.id).then(() =>
-                              setAppointments(prev => prev.map(x => x.id === a.id ? { ...x, status: 'em_atendimento' } : x))
-                            );
-                          }} style={{ height: 24, padding: '0 8px', background: '#0066D0', color: '#fff', border: 'none', borderRadius: 4, fontSize: 11, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit' }}>Chamar</button>
-                          <button onClick={() => a.patient_id && onNavigateProntuario?.(a.patient_id)} style={{ height: 24, padding: '0 8px', background: '#fff', color: '#374151', border: '1px solid #E5E7EB', borderRadius: 4, fontSize: 11, cursor: 'pointer', fontFamily: 'inherit' }}>Prontuário</button>
+                      {a.status === 'agendado' && (
+                        <div style={{ display:'flex', gap:4 }}>
+                          <button onClick={() => updateStatus(a.id,'confirmado')} style={{ height:22, padding:'0 7px', background:'#10B981', color:'#fff', border:'none', borderRadius:4, fontSize:10, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>Confirmar</button>
+                          <button onClick={() => a.patient_id && onNavigateProntuario?.(a.patient_id)} style={{ height:22, padding:'0 7px', background:'#fff', color:'#374151', border:'1px solid #E5E7EB', borderRadius:4, fontSize:10, cursor:'pointer', fontFamily:'inherit' }}>Prontuário</button>
                         </div>
+                      )}
+                      {a.status === 'confirmado' && (
+                        <div style={{ display:'flex', gap:4 }}>
+                          <button onClick={() => updateStatus(a.id,'aguardando')} style={{ height:22, padding:'0 7px', background:'#FBBF24', color:'#fff', border:'none', borderRadius:4, fontSize:10, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>Check-in</button>
+                          <button onClick={() => a.patient_id && onNavigateProntuario?.(a.patient_id)} style={{ height:22, padding:'0 7px', background:'#fff', color:'#374151', border:'1px solid #E5E7EB', borderRadius:4, fontSize:10, cursor:'pointer', fontFamily:'inherit' }}>Prontuário</button>
+                        </div>
+                      )}
+                      {a.status === 'aguardando' && (
+                        <div style={{ display:'flex', gap:4 }}>
+                          <button onClick={() => updateStatus(a.id,'em_atendimento')} style={{ height:22, padding:'0 7px', background:'#0066D0', color:'#fff', border:'none', borderRadius:4, fontSize:10, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>Chamar</button>
+                          <button onClick={() => a.patient_id && onNavigateProntuario?.(a.patient_id)} style={{ height:22, padding:'0 7px', background:'#fff', color:'#374151', border:'1px solid #E5E7EB', borderRadius:4, fontSize:10, cursor:'pointer', fontFamily:'inherit' }}>Prontuário</button>
+                        </div>
+                      )}
+                      {a.status === 'em_atendimento' && (
+                        <button onClick={() => updateStatus(a.id,'concluido')} style={{ height:22, padding:'0 7px', background:'#10B981', color:'#fff', border:'none', borderRadius:4, fontSize:10, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>Concluir</button>
                       )}
                     </div>
                   </div>
@@ -525,53 +563,103 @@ function Dashboard({ onNavigateProntuario }: { onNavigateProntuario?: (patientId
           }
         </Card>
 
-        <Card style={{ display: 'flex', flexDirection: 'column' }}>
-          <div style={{ padding: '12px 16px', borderBottom: '1px solid #F3F4F6', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: 13, fontWeight: 600, color: '#111827' }}>Fluxo de Caixa da Semana</span>
-            <span style={{ fontSize: 12, color: '#9CA3AF' }}>{new Date().toLocaleDateString('pt-BR',{month:'short',day:'2-digit'})}</span>
+        {/* Fluxo de Caixa */}
+        <Card style={{ display:'flex', flexDirection:'column' }}>
+          <div style={{ padding:'12px 16px', borderBottom:'1px solid #F3F4F6', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+            <span style={{ fontSize:13, fontWeight:600, color:'#111827' }}>Fluxo de Caixa da Semana</span>
+            <span style={{ fontSize:12, color:'#9CA3AF' }}>{new Date().toLocaleDateString('pt-BR',{month:'short',day:'2-digit'})}</span>
           </div>
-          <div style={{ padding: '12px 16px 8px' }}>
-            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 2 }}>Saldo do período</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: '#111827' }}>
-              <span style={{ color: saldo >= 0 ? '#10B981' : '#EF4444' }}>{fmtCurrency(saldo)}</span>
-            </div>
-            <div style={{ display: 'flex', gap: 16, marginTop: 8 }}>
-              {[{ dot: '#0066D0', label: 'Receitas', val: fmtCurrency(receitas) }, { dot: '#EF4444', label: 'Despesas', val: fmtCurrency(despesas) }].map((s, i) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                  <div style={{ width: 8, height: 8, borderRadius: 2, background: s.dot }} />
-                  <span style={{ fontSize: 11, color: '#9CA3AF' }}>{s.label}</span>
-                  <span style={{ fontSize: 12, fontWeight: 600, color: '#374151' }}>{s.val}</span>
+          <div style={{ padding:'12px 16px 8px' }}>
+            <div style={{ fontSize:11, color:'#6B7280', marginBottom:2 }}>Saldo do período</div>
+            <div style={{ fontSize:22, fontWeight:700, color: saldo>=0?'#10B981':'#EF4444' }}>{fmtCurrency(saldo)}</div>
+            <div style={{ display:'flex', gap:16, marginTop:6 }}>
+              {[{dot:'#0066D0',label:'Receitas',val:fmtCurrency(receitas)},{dot:'#EF4444',label:'Despesas',val:fmtCurrency(despesas)}].map((s,i)=>(
+                <div key={i} style={{ display:'flex', alignItems:'center', gap:5 }}>
+                  <div style={{ width:8, height:8, borderRadius:2, background:s.dot }} />
+                  <span style={{ fontSize:11, color:'#9CA3AF' }}>{s.label}</span>
+                  <span style={{ fontSize:12, fontWeight:600, color:'#374151' }}>{s.val}</span>
                 </div>
               ))}
             </div>
           </div>
-          <div style={{ padding: '0 16px 8px' }}>
-            <div style={{ display: 'flex', gap: 5, alignItems: 'flex-end', height: 80 }}>
-              {barData.map((b, i) => (
-                <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                  <div style={{ display: 'flex', gap: 2, alignItems: 'flex-end', width: '100%', height: 66 }}>
-                    <div style={{ flex: 1, background: '#BFDBFE', height: (b.rec || 3) + '%', borderRadius: '2px 2px 0 0', minHeight: 3 }} />
-                    <div style={{ flex: 1, background: '#FECACA', height: (b.desp || 3) + '%', borderRadius: '2px 2px 0 0', minHeight: 3 }} />
+          {/* Gráfico com valores */}
+          <div style={{ padding:'0 16px 4px' }}>
+            <div style={{ display:'flex', gap:4, alignItems:'flex-end', height:90 }}>
+              {barData.map((b,i) => (
+                <div key={i} style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center' }}>
+                  {b.rec > 0 && <div style={{ fontSize:9, color:'#0066D0', fontWeight:600, marginBottom:2, whiteSpace:'nowrap' }}>
+                    {b.rec >= 1000 ? `${(b.rec/1000).toFixed(1)}k` : String(Math.round(b.rec))}
+                  </div>}
+                  <div style={{ display:'flex', gap:2, alignItems:'flex-end', width:'100%', height:66 }}>
+                    <div style={{ flex:1, background: b.active?'#3B82F6':'#BFDBFE', height:(b.recH||3)+'%', borderRadius:'2px 2px 0 0', minHeight:3, transition:'height 0.3s' }} />
+                    <div style={{ flex:1, background: b.active?'#F87171':'#FECACA', height:(b.despH||3)+'%', borderRadius:'2px 2px 0 0', minHeight:3, transition:'height 0.3s' }} />
                   </div>
-                  <div style={{ fontSize: 10, color: '#9CA3AF', marginTop: 4 }}>{b.day}</div>
+                  <div style={{ fontSize:10, color:b.active?'#111827':'#9CA3AF', marginTop:3, fontWeight:b.active?600:400 }}>{b.day}</div>
                 </div>
               ))}
             </div>
           </div>
-          <div style={{ margin: '0 16px 14px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-            {[
-              { label: 'Receitas pendentes', val: fmtCurrency(pendRecVal),  color: '#0066D0', n: `${pendRec.length} transações` },
-              { label: 'Despesas pendentes', val: fmtCurrency(pendDespVal), color: '#EF4444', n: `${pendDesp.length} transações` },
-            ].map((s, i) => (
-              <div key={i} style={{ background: '#F9FAFB', border: '1px solid #E5E7EB', borderRadius: 6, padding: '9px 11px' }}>
-                <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 3 }}>{s.label}</div>
-                <div style={{ fontSize: 15, fontWeight: 700, color: s.color }}>{s.val}</div>
-                <div style={{ fontSize: 10, color: '#9CA3AF', marginTop: 2 }}>{s.n}</div>
-              </div>
-            ))}
-          </div>
+          {/* Pendentes — só mostra se houver */}
+          {(pendRecVal > 0 || pendDespVal > 0) ? (
+            <div style={{ margin:'4px 16px 14px', display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
+              {pendRecVal > 0 && (
+                <div style={{ background:'#F0FDF4', border:'1px solid #BBF7D0', borderRadius:6, padding:'8px 11px' }}>
+                  <div style={{ fontSize:11, color:'#6B7280', marginBottom:2 }}>Receitas pendentes</div>
+                  <div style={{ fontSize:14, fontWeight:700, color:'#10B981' }}>{fmtCurrency(pendRecVal)}</div>
+                  <div style={{ fontSize:10, color:'#9CA3AF', marginTop:1 }}>{pendRec.length} transação{pendRec.length>1?'s':''}</div>
+                </div>
+              )}
+              {pendDespVal > 0 && (
+                <div style={{ background:'#FEF2F2', border:'1px solid #FECACA', borderRadius:6, padding:'8px 11px' }}>
+                  <div style={{ fontSize:11, color:'#6B7280', marginBottom:2 }}>Despesas pendentes</div>
+                  <div style={{ fontSize:14, fontWeight:700, color:'#EF4444' }}>{fmtCurrency(pendDespVal)}</div>
+                  <div style={{ fontSize:10, color:'#9CA3AF', marginTop:1 }}>{pendDesp.length} transação{pendDesp.length>1?'s':''}</div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div style={{ margin:'4px 16px 14px', padding:'8px 11px', background:'#F0FDF4', borderRadius:6, display:'flex', alignItems:'center', gap:6 }}>
+              <Icon name="check" size={13} color="#10B981" />
+              <span style={{ fontSize:12, color:'#10B981', fontWeight:500 }}>Sem pendências financeiras esta semana</span>
+            </div>
+          )}
         </Card>
       </div>
+
+      {/* Linha do tempo do dia */}
+      <Card>
+        <div style={{ padding:'12px 16px', borderBottom:'1px solid #F3F4F6', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+          <span style={{ fontSize:13, fontWeight:600, color:'#111827' }}>Agenda de Hoje</span>
+          <span style={{ fontSize:12, color:'#9CA3AF' }}>{appointments.length} agendamento{appointments.length!==1?'s':''}</span>
+        </div>
+        {appointments.length === 0
+          ? <div style={{ padding:'20px 16px', textAlign:'center', color:'#9CA3AF', fontSize:13 }}>Nenhum agendamento para hoje</div>
+          : (
+            <div style={{ padding:'12px 16px', display:'flex', gap:0, overflowX:'auto', alignItems:'stretch', minHeight:80 }}>
+              {appointments.map((a,i) => {
+                const statusColor: Record<string,string> = { agendado:'#0066D0', confirmado:'#10B981', aguardando:'#FBBF24', em_atendimento:'#8B5CF6', concluido:'#6B7280', faltou:'#EF4444', cancelado:'#9CA3AF' };
+                const col = statusColor[a.status] ?? '#9CA3AF';
+                return (
+                  <div key={a.id} style={{ display:'flex', flexDirection:'column', alignItems:'center', minWidth:72, position:'relative', flex:'0 0 auto' }}>
+                    {/* linha conectora */}
+                    {i < appointments.length-1 && (
+                      <div style={{ position:'absolute', top:18, left:'50%', width:'100%', height:2, background:'#F3F4F6', zIndex:0 }} />
+                    )}
+                    <div style={{ width:36, height:36, borderRadius:'50%', background:col+'22', border:`2px solid ${col}`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:11, fontWeight:700, color:col, zIndex:1, flexShrink:0 }}>
+                      {a.start_time?.slice(0,5)}
+                    </div>
+                    <div style={{ fontSize:11, fontWeight:600, color:'#111827', marginTop:6, textAlign:'center', maxWidth:68, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                      {(a.patients?.name ?? 'Paciente').split(' ')[0]}
+                    </div>
+                    <div style={{ fontSize:10, color:col, fontWeight:500, marginTop:1 }}>{a.status.replace('_',' ')}</div>
+                  </div>
+                );
+              })}
+            </div>
+          )
+        }
+      </Card>
+
     </div>
   );
 }
