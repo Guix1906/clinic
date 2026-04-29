@@ -1492,6 +1492,7 @@ function Prontuario({ initialPatientId }: { initialPatientId?: string }) {
   const [selected, setSelected]           = useState<Patient | null>(null);
   const [loading, setLoading]             = useState(true);
   const [showConsulta, setShowConsulta]   = useState(false);
+  const [editRecord,   setEditRecord]     = useState<MedicalRecord | null>(null);
   const [records, setRecords]             = useState<MedicalRecord[]>([]);
   const [prescriptions, setPrescriptions] = useState<Prescription[]>([]);
   const [showTagInput, setShowTagInput]   = useState(false);
@@ -1636,15 +1637,50 @@ function Prontuario({ initialPatientId }: { initialPatientId?: string }) {
                 {records.length === 0
                   ? <div style={{ padding: '24px 16px', textAlign: 'center', color: '#9CA3AF', fontSize: 13 }}>Nenhuma consulta registrada</div>
                   : records.map((r, i) => (
-                    <div key={r.id} style={{ padding: '12px 16px', borderBottom: i < records.length - 1 ? '1px solid #F3F4F6' : 'none' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                        <span style={{ fontSize: 13, fontWeight: 600, color: '#111827' }}>{r.diagnosis ?? 'Consulta'}</span>
-                        <span style={{ fontSize: 12, color: '#9CA3AF' }}>{new Date(r.created_at).toLocaleDateString('pt-BR')}</span>
+                    <div key={r.id} style={{ padding: '14px 16px', borderBottom: i < records.length - 1 ? '1px solid #F3F4F6' : 'none' }}>
+                      {/* Card header */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
+                        <div>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: '#111827' }}>
+                            {r.diagnosis_code ? `${r.diagnosis_code} — ` : ''}{r.diagnosis ?? 'Consulta'}
+                          </span>
+                          <div style={{ fontSize: 11, color: '#9CA3AF', marginTop: 2 }}>
+                            {new Date(r.created_at).toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })}
+                          </div>
+                        </div>
+                        <button onClick={() => setEditRecord(r)} style={{
+                          height: 28, padding: '0 12px', border: '1px solid #EA580C', borderRadius: 6,
+                          background: '#FFF7ED', color: '#EA580C', fontSize: 12, fontWeight: 600,
+                          cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0, marginLeft: 12,
+                        }}>
+                          ✏️ Editar
+                        </button>
                       </div>
-                      {r.complaint    && <div style={{ fontSize: 12, color: '#374151', marginBottom: 2 }}><strong>Queixa:</strong> {r.complaint}</div>}
-                      {r.evolution    && <div style={{ fontSize: 12, color: '#374151', marginBottom: 2 }}><strong>Evolução:</strong> {r.evolution}</div>}
-                      {r.conduct      && <div style={{ fontSize: 12, color: '#374151', marginBottom: 2 }}><strong>Conduta:</strong> {r.conduct}</div>}
-                      {r.diagnosis_code && <Badge variant="blue">{r.diagnosis_code}</Badge>}
+                      {/* Card body */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                        {r.complaint  && (
+                          <div style={{ fontSize: 12, color: '#374151' }}>
+                            <span style={{ fontWeight: 600, color: '#111827' }}>Queixa principal: </span>{r.complaint}
+                          </div>
+                        )}
+                        {r.evolution  && (
+                          <div style={{ fontSize: 12, color: '#374151' }}>
+                            <span style={{ fontWeight: 600, color: '#111827' }}>Exame físico / Evolução: </span>{r.evolution}
+                          </div>
+                        )}
+                        {r.conduct    && (
+                          <div style={{ fontSize: 12, color: '#374151' }}>
+                            <span style={{ fontWeight: 600, color: '#111827' }}>Conduta: </span>{r.conduct}
+                          </div>
+                        )}
+                        {r.return_date && (
+                          <div style={{ fontSize: 12, color: '#374151' }}>
+                            <span style={{ fontWeight: 600, color: '#111827' }}>Retorno: </span>
+                            {new Date(r.return_date + 'T12:00:00').toLocaleDateString('pt-BR')}
+                            {r.return_notes ? ` — ${r.return_notes}` : ''}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   ))
                 }
@@ -1699,6 +1735,13 @@ function Prontuario({ initialPatientId }: { initialPatientId?: string }) {
       {showConsulta && selected && (
         <ConsultaModal patient={selected} onClose={() => setShowConsulta(false)} onSaved={() => {
           setShowConsulta(false);
+          supabase.from('medical_records').select('*').eq('patient_id', selected.id).order('created_at', { ascending: false }).then(({ data }) => setRecords((data as MedicalRecord[]) ?? []));
+          supabase.from('prescriptions').select('*').eq('patient_id', selected.id).order('created_at', { ascending: false }).then(({ data }) => setPrescriptions((data as Prescription[]) ?? []));
+        }} />
+      )}
+      {editRecord && selected && (
+        <EditConsultaModal patient={selected} record={editRecord} onClose={() => setEditRecord(null)} onSaved={() => {
+          setEditRecord(null);
           supabase.from('medical_records').select('*').eq('patient_id', selected.id).order('created_at', { ascending: false }).then(({ data }) => setRecords((data as MedicalRecord[]) ?? []));
           supabase.from('prescriptions').select('*').eq('patient_id', selected.id).order('created_at', { ascending: false }).then(({ data }) => setPrescriptions((data as Prescription[]) ?? []));
         }} />
@@ -3510,6 +3553,139 @@ function ConsultaModal({ patient, onClose, onSaved }: { patient: Patient; onClos
             <button onClick={onClose} style={{ height: 36, padding: '0 20px', background: '#fff', border: '1px solid #D1D5DB', borderRadius: 6, fontSize: 13, color: '#374151', cursor: 'pointer', fontFamily: 'inherit' }}>Cancelar</button>
             <button onClick={handleSave} disabled={saving} style={{ height: 36, padding: '0 24px', background: '#0066D0', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
               {saving ? 'Salvando...' : 'Finalizar Consulta'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────
+   EDIT CONSULTA MODAL
+─────────────────────────────────────────── */
+function EditConsultaModal({ patient, record, onClose, onSaved }: {
+  patient: Patient; record: MedicalRecord; onClose: () => void; onSaved?: () => void;
+}) {
+  const [queixa,       setQueixa]       = useState(record.complaint      ?? '');
+  const [evolucao,     setEvolucao]     = useState(record.evolution      ?? '');
+  const [diagnostico,  setDiag]         = useState(record.diagnosis      ?? '');
+  const [cid,          setCid]          = useState(record.diagnosis_code ?? '');
+  const [conduta,      setConduta]      = useState(record.conduct        ?? '');
+  const [retorno,      setRetorno]      = useState(record.return_date    ?? '');
+  const [retornoNotes, setRetornoNotes] = useState(record.return_notes   ?? '');
+  const [prescricoes,  setPrescricoes]  = useState<{id?:string;med:string;dose:string;freq:string;dur:string}[]>([]);
+  const [saving,       setSaving]       = useState(false);
+  const [saveError,    setSaveError]    = useState('');
+
+  useEffect(() => {
+    supabase.from('prescriptions').select('*').eq('medical_record_id', record.id).order('created_at')
+      .then(({ data }) => {
+        setPrescricoes((data ?? []).map((p: any) => ({
+          id: p.id, med: p.medication ?? '', dose: p.dosage ?? '', freq: p.frequency ?? '', dur: p.duration ?? '',
+        })));
+      });
+  }, [record.id]);
+
+  const addPresc    = () => setPrescricoes(p => [...p, { med:'', dose:'', freq:'', dur:'' }]);
+  const updatePresc = (i: number, field: string, val: string) =>
+    setPrescricoes(p => p.map((item, idx) => idx === i ? { ...item, [field]: val } : item));
+
+  const handleSave = async () => {
+    setSaving(true); setSaveError('');
+    const { error } = await supabase.from('medical_records').update({
+      complaint: queixa || null, evolution: evolucao || null,
+      diagnosis: diagnostico || null, diagnosis_code: cid || null,
+      conduct: conduta || null, return_date: retorno || null, return_notes: retornoNotes || null,
+    }).eq('id', record.id);
+    if (error) { setSaveError('Erro: ' + error.message); setSaving(false); return; }
+    await supabase.from('prescriptions').delete().eq('medical_record_id', record.id);
+    const { data: doc } = await supabase.from('doctors').select('id').limit(1);
+    const doctorId = doc?.[0]?.id;
+    for (const p of prescricoes.filter(p => p.med.trim())) {
+      await supabase.from('prescriptions').insert({
+        patient_id: patient.id, medical_record_id: record.id, doctor_id: doctorId || null,
+        medication: p.med, dosage: p.dose || null, frequency: p.freq || null, duration: p.dur || null,
+      });
+    }
+    setSaving(false); onSaved?.(); onClose();
+  };
+
+  const inp: CSSProperties = { width: '100%', border: '1px solid #D1D5DB', borderRadius: 6, padding: '8px 10px', fontSize: 13, color: '#111827', fontFamily: 'inherit', outline: 'none', background: '#fff', boxSizing: 'border-box' };
+  const lbl: CSSProperties = { fontSize: 12, fontWeight: 500, color: '#374151', marginBottom: 4, display: 'block' };
+  const dateStr = new Date(record.created_at).toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 200, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: 30, overflowY: 'auto' }}>
+      <div style={{ background: '#fff', borderRadius: 10, width: 680, boxShadow: '0 20px 60px rgba(0,0,0,0.25)', marginBottom: 40 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 20px', borderBottom: '1px solid #E5E7EB', background: '#FFF7ED', borderRadius: '10px 10px 0 0' }}>
+          <div>
+            <span style={{ fontSize: 15, fontWeight: 600, color: '#EA580C' }}>Editar Consulta — {patient.name}</span>
+            <div style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }}>{dateStr}</div>
+          </div>
+          <button onClick={onClose} style={{ width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'none', border: 'none', cursor: 'pointer', fontSize: 20, color: '#9CA3AF', borderRadius: 6 }}>×</button>
+        </div>
+
+        <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 14, maxHeight: '72vh', overflowY: 'auto' }}>
+          <div>
+            <label style={lbl}>Queixa principal</label>
+            <textarea value={queixa} onChange={e => setQueixa(e.target.value)} rows={3} style={inp} placeholder="Queixa principal do paciente..." />
+          </div>
+          <div>
+            <label style={lbl}>Evolução / Exame físico</label>
+            <textarea value={evolucao} onChange={e => setEvolucao(e.target.value)} rows={3} style={inp} />
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 140px', gap: 12 }}>
+            <div>
+              <label style={lbl}>Diagnóstico / Hipótese</label>
+              <input value={diagnostico} onChange={e => setDiag(e.target.value)} style={{ ...inp, padding: '0 10px', height: 36 }} />
+            </div>
+            <div>
+              <label style={lbl}>CID-10</label>
+              <input value={cid} onChange={e => setCid(e.target.value)} placeholder="Ex: K29" style={{ ...inp, padding: '0 10px', height: 36 }} />
+            </div>
+          </div>
+          <div>
+            <label style={lbl}>Conduta / Plano terapêutico</label>
+            <textarea value={conduta} onChange={e => setConduta(e.target.value)} rows={3} style={inp} />
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '160px 1fr', gap: 12 }}>
+            <div>
+              <label style={lbl}>Retorno em</label>
+              <input type="date" value={retorno} onChange={e => setRetorno(e.target.value)} style={{ ...inp, padding: '0 10px', height: 36 }} />
+            </div>
+            <div>
+              <label style={lbl}>Observações do retorno</label>
+              <input value={retornoNotes} onChange={e => setRetornoNotes(e.target.value)} style={{ ...inp, padding: '0 10px', height: 36 }} />
+            </div>
+          </div>
+
+          <div style={{ background: '#F9FAFB', border: '1px solid #E5E7EB', borderRadius: 8, padding: '12px 14px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: '#111827' }}>Prescrições</span>
+              <button onClick={addPresc} style={{ height: 28, padding: '0 12px', background: '#0066D0', color: '#fff', border: 'none', borderRadius: 5, fontSize: 12, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit' }}>+ Adicionar</button>
+            </div>
+            {prescricoes.length === 0
+              ? <div style={{ fontSize: 12, color: '#9CA3AF', textAlign: 'center', padding: '8px 0' }}>Nenhuma prescrição</div>
+              : prescricoes.map((p, i) => (
+                <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr auto', gap: 8, marginBottom: 8, alignItems: 'start' }}>
+                  <div><input value={p.med}  onChange={e => updatePresc(i,'med', e.target.value)} placeholder="Medicamento *" style={{ ...inp, padding: '0 8px', height: 32, fontSize: 12 }} /></div>
+                  <div><input value={p.dose} onChange={e => updatePresc(i,'dose',e.target.value)} placeholder="Dose"          style={{ ...inp, padding: '0 8px', height: 32, fontSize: 12 }} /></div>
+                  <div><input value={p.freq} onChange={e => updatePresc(i,'freq',e.target.value)} placeholder="Frequência"    style={{ ...inp, padding: '0 8px', height: 32, fontSize: 12 }} /></div>
+                  <div><input value={p.dur}  onChange={e => updatePresc(i,'dur', e.target.value)} placeholder="Duração"       style={{ ...inp, padding: '0 8px', height: 32, fontSize: 12 }} /></div>
+                  <button onClick={() => setPrescricoes(p => p.filter((_,idx) => idx !== i))} style={{ width: 28, height: 32, background: 'none', border: '1px solid #E5E7EB', borderRadius: 4, cursor: 'pointer', color: '#EF4444', fontSize: 14, fontFamily: 'inherit' }}>×</button>
+                </div>
+              ))
+            }
+          </div>
+        </div>
+
+        <div style={{ borderTop: '1px solid #E5E7EB', padding: '14px 20px' }}>
+          {saveError && <div style={{ fontSize: 12, color: '#EF4444', marginBottom: 10 }}>{saveError}</div>}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <button onClick={onClose} style={{ height: 36, padding: '0 20px', background: '#fff', border: '1px solid #D1D5DB', borderRadius: 6, fontSize: 13, color: '#374151', cursor: 'pointer', fontFamily: 'inherit' }}>Cancelar</button>
+            <button onClick={handleSave} disabled={saving} style={{ height: 36, padding: '0 24px', background: '#EA580C', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+              {saving ? 'Salvando...' : 'Salvar Alterações'}
             </button>
           </div>
         </div>
