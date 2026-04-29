@@ -955,6 +955,134 @@ function Dashboard({ onNavigateProntuario }: { onNavigateProntuario?: (patientId
 }
 
 /* ─────────────────────────────────────────
+   AGENDA — DATE HELPERS
+───────────────────────────────────────── */
+/** Monday of the week that contains `dateIso` */
+function weekStartFor(dateIso: string): string {
+  const d = new Date(dateIso + 'T12:00:00');
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  return d.toISOString().split('T')[0];
+}
+/** Shift an ISO date by N days */
+function shiftDays(dateIso: string, n: number): string {
+  const d = new Date(dateIso + 'T12:00:00');
+  d.setDate(d.getDate() + n);
+  return d.toISOString().split('T')[0];
+}
+
+/* ─────────────────────────────────────────
+   MINI CALENDAR PICKER
+───────────────────────────────────────── */
+const MONTH_NAMES_PT = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho',
+                        'Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+const DOW_PT = ['Se','Te','Qu','Qu','Se','Sá','Do'];
+
+function MiniCalendar({ selected, onSelect, onClose }: {
+  selected: string;
+  onSelect: (iso: string) => void;
+  onClose:  () => void;
+}) {
+  const [vy, setVy] = useState(() => parseInt(selected.slice(0, 4)));
+  const [vm, setVm] = useState(() => parseInt(selected.slice(5, 7)) - 1);
+
+  const hols        = { ...getBrazilHolidays(vy), ...getBrazilHolidays(vy + 1) };
+  const selWeekMon  = weekStartFor(selected);
+  const todayIso    = todayISO();
+
+  const firstOfMonth = new Date(vy, vm, 1);
+  const startPad     = (firstOfMonth.getDay() + 6) % 7; // Mon = 0
+  const daysInMonth  = new Date(vy, vm + 1, 0).getDate();
+  const totalCells   = Math.ceil((startPad + daysInMonth) / 7) * 7;
+
+  const prevM = () => vm === 0  ? (setVy(y => y - 1), setVm(11)) : setVm(m => m - 1);
+  const nextM = () => vm === 11 ? (setVy(y => y + 1), setVm(0))  : setVm(m => m + 1);
+
+  const navBtn: React.CSSProperties = {
+    background: 'none', border: 'none', cursor: 'pointer', fontSize: 16,
+    color: '#6B7280', padding: '0 6px', fontFamily: 'inherit', lineHeight: 1,
+  };
+
+  return (
+    <>
+      {/* Backdrop */}
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 999 }} />
+
+      {/* Calendar popup */}
+      <div style={{
+        position: 'absolute', zIndex: 1000, top: '100%', left: 0, marginTop: 4,
+        background: '#fff', borderRadius: 10, border: '1px solid #E5E7EB',
+        boxShadow: '0 8px 30px rgba(0,0,0,.14)', padding: '12px 10px', width: 252,
+      }}>
+        {/* Month navigation */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+          <button onClick={prevM} style={navBtn}>«</button>
+          <span style={{ fontSize: 14, fontWeight: 700, color: '#0066D0' }}>
+            {MONTH_NAMES_PT[vm]} {vy}
+          </span>
+          <button onClick={nextM} style={navBtn}>»</button>
+        </div>
+
+        {/* Day-of-week headers */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', marginBottom: 4 }}>
+          {DOW_PT.map((d, i) => (
+            <div key={i} style={{ textAlign: 'center', fontSize: 10, fontWeight: 600, color: '#9CA3AF', padding: '2px 0' }}>{d}</div>
+          ))}
+        </div>
+
+        {/* Day cells */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gap: 1 }}>
+          {Array.from({ length: totalCells }, (_, ci) => {
+            const dayNum = ci - startPad + 1;
+            if (dayNum < 1 || dayNum > daysInMonth) return <div key={ci} />;
+
+            const iso        = `${vy}-${String(vm + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
+            const isToday    = iso === todayIso;
+            const isHol      = !!hols[iso];
+            const inSelWeek  = weekStartFor(iso) === selWeekMon;
+            const isSun      = (ci + 1) % 7 === 0;
+            const isSat      = ci % 7 === 6;
+
+            return (
+              <div key={ci} onClick={() => { onSelect(iso); onClose(); }}
+                title={isHol ? hols[iso] : undefined}
+                style={{
+                  height: 32, display: 'flex', flexDirection: 'column',
+                  alignItems: 'center', justifyContent: 'center',
+                  borderRadius: 6, cursor: 'pointer', position: 'relative',
+                  background: inSelWeek ? '#DBEAFE' : 'transparent',
+                  border: isToday ? '1.5px solid #0066D0' : '1.5px solid transparent',
+                }}>
+                <span style={{
+                  fontSize: 12, fontWeight: isToday ? 700 : 400,
+                  color: isHol ? '#BE123C' : isSat || isSun ? '#9CA3AF' : isToday ? '#0066D0' : '#374151',
+                }}>
+                  {dayNum}
+                </span>
+                {isHol && (
+                  <div style={{
+                    position: 'absolute', bottom: 3,
+                    width: 4, height: 4, borderRadius: '50%', background: '#BE123C',
+                  }} />
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Today shortcut */}
+        <button onClick={() => { onSelect(todayIso); onClose(); }} style={{
+          marginTop: 10, width: '100%', height: 30, background: '#EFF6FF',
+          border: '1px solid #BFDBFE', borderRadius: 6, fontSize: 12,
+          color: '#0066D0', fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+        }}>
+          Hoje
+        </button>
+      </div>
+    </>
+  );
+}
+
+/* ─────────────────────────────────────────
    AGENDA — DND HELPERS
 ───────────────────────────────────────── */
 function DroppableSlot({ id, isWeekend, isHoliday, children }: {
@@ -1023,13 +1151,16 @@ function Agenda() {
   const [showAddAppt,  setShowAddAppt]  = useState(false);
   const [showWaitlist, setShowWaitlist] = useState(false);
   const [activeAppt,   setActiveAppt]   = useState<Appointment | null>(null);
+  const [refDate,      setRefDate]      = useState(todayISO());
+  const [showPicker,   setShowPicker]   = useState(false);
 
-  const { start, end } = weekRange();
   const today    = todayISO();
-  const holidays = getBrazilHolidays(new Date().getFullYear());
+  const wStart   = weekStartFor(refDate);
+  const wEnd     = shiftDays(wStart, 6);
+  const holidays = getBrazilHolidays(new Date(refDate + 'T12:00:00').getFullYear());
 
   const allDays = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(start + 'T12:00:00');
+    const d = new Date(wStart + 'T12:00:00');
     d.setDate(d.getDate() + i);
     const names = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
     return {
@@ -1040,16 +1171,19 @@ function Agenda() {
       weekend: d.getDay() === 0 || d.getDay() === 6,
     };
   });
-  const agendaDays = view === 'SEMANA' ? allDays : allDays.filter(d => d.iso === today) ?? [allDays[1]];
+  const agendaDays = view === 'SEMANA'
+    ? allDays
+    : (allDays.find(d => d.iso === refDate) ? allDays.filter(d => d.iso === refDate) : [allDays[0]]);
 
   const loadAppointments = () => {
     setLoading(true);
     supabase.from('appointments')
       .select('*, patients(id,name)')
-      .gte('date', start).lte('date', end).order('start_time')
+      .gte('date', wStart).lte('date', wEnd).order('start_time')
       .then(({ data }) => { setAppointments((data as Appointment[]) ?? []); setLoading(false); });
   };
-  useEffect(() => { loadAppointments(); }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { loadAppointments(); }, [wStart]);
 
   /* ── DnD sensors ── */
   const sensors = useSensors(
@@ -1119,7 +1253,52 @@ function Agenda() {
 
       {/* ── Week range + view toggle ── */}
       <div style={{ padding: '8px 16px', background: '#fff', borderBottom: '1px solid #E5E7EB', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
-        <span style={{ fontSize: 13, color: '#374151' }}>{allDays[0].date} – {allDays[6].date}</span>
+
+        {/* Navigation: ‹ Hoje › + date picker */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, position: 'relative' }}>
+          <button onClick={() => setRefDate(d => view === 'SEMANA' ? shiftDays(d, -7) : shiftDays(d, -1))} style={{
+            height: 28, width: 28, border: '1px solid #E5E7EB', borderRadius: 6,
+            background: '#fff', fontSize: 16, cursor: 'pointer', lineHeight: 1,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#374151',
+          }}>‹</button>
+
+          <button onClick={() => setRefDate(todayISO())} style={{
+            height: 28, padding: '0 10px', border: '1px solid #E5E7EB', borderRadius: 6,
+            background: '#fff', fontSize: 11, cursor: 'pointer', fontFamily: 'inherit', color: '#374151',
+          }}>Hoje</button>
+
+          <button onClick={() => setRefDate(d => view === 'SEMANA' ? shiftDays(d, 7) : shiftDays(d, 1))} style={{
+            height: 28, width: 28, border: '1px solid #E5E7EB', borderRadius: 6,
+            background: '#fff', fontSize: 16, cursor: 'pointer', lineHeight: 1,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#374151',
+          }}>›</button>
+
+          {/* Clickable date label — opens mini calendar */}
+          <button onClick={() => setShowPicker(p => !p)} style={{
+            height: 28, padding: '0 10px', border: '1px solid #E5E7EB', borderRadius: 6,
+            background: showPicker ? '#EFF6FF' : '#fff', fontSize: 12, cursor: 'pointer',
+            fontFamily: 'inherit', color: showPicker ? '#0066D0' : '#374151', fontWeight: 500,
+            display: 'flex', alignItems: 'center', gap: 5,
+          }}>
+            <span>
+              {view === 'SEMANA'
+                ? `${allDays[0].date} – ${allDays[6].date}`
+                : (allDays.find(d => d.iso === refDate)?.date ?? allDays[0].date)}
+            </span>
+            <span style={{ fontSize: 13 }}>📅</span>
+          </button>
+
+          {/* Mini-calendar popup */}
+          {showPicker && (
+            <MiniCalendar
+              selected={refDate}
+              onSelect={d => { setRefDate(d); setShowPicker(false); }}
+              onClose={() => setShowPicker(false)}
+            />
+          )}
+        </div>
+
+        {/* Day / Semana toggle */}
         <div style={{ display: 'flex' }}>
           {(['DIA', 'SEMANA'] as const).map(v => (
             <button key={v} onClick={() => setView(v)} style={{
