@@ -1522,6 +1522,10 @@ function Prontuario({ initialPatientId }: { initialPatientId?: string }) {
   const [timerActive,     setTimerActive]     = useState(false);
   const [showDiags,       setShowDiags]       = useState(true);
   const [filterType,      setFilterType]      = useState('todos');
+  const [listView,        setListView]        = useState(!initialPatientId);
+  const [search,          setSearch]          = useState('');
+  const [lastConsults,    setLastConsults]    = useState<Record<string,string>>({});
+  const [checkedIds,      setCheckedIds]      = useState<string[]>([]);
 
   useEffect(() => {
     if (!timerActive) return;
@@ -1553,14 +1557,29 @@ function Prontuario({ initialPatientId }: { initialPatientId?: string }) {
     { id: 'presc',     label: 'Prescrições' },
   ];
 
+  // Patient code (pseudo-code from id)
+  const patientCode = (id: string) =>
+    String(parseInt(id.replace(/-/g, '').slice(0, 8), 16) % 900000 + 100000);
+
   useEffect(() => {
     supabase.from('patients').select('*').eq('active', true).order('name')
       .then(({ data }) => {
         const list = (data as Patient[]) ?? [];
         setPatients(list);
-        const initial = initialPatientId ? list.find(p => p.id === initialPatientId) : list[0];
-        if (initial) setSelected(initial);
+        if (initialPatientId) {
+          const initial = list.find(p => p.id === initialPatientId);
+          if (initial) { setSelected(initial); setListView(false); }
+        }
         setLoading(false);
+      });
+    // Load last consultation per patient
+    supabase.from('medical_records').select('patient_id, created_at').order('created_at', { ascending: false })
+      .then(({ data }) => {
+        const map: Record<string, string> = {};
+        for (const r of (data ?? []) as any[]) {
+          if (!map[r.patient_id]) map[r.patient_id] = r.created_at;
+        }
+        setLastConsults(map);
       });
   }, []);
 
@@ -1587,6 +1606,148 @@ function Prontuario({ initialPatientId }: { initialPatientId?: string }) {
     return true;
   });
 
+  const searchedPatients = patients.filter(p => {
+    if (!search.trim()) return true;
+    const q = search.toLowerCase();
+    return (
+      p.name.toLowerCase().includes(q) ||
+      (p.phone ?? '').includes(q) ||
+      ((p as any).cpf ?? '').includes(q) ||
+      patientCode(p.id).includes(q)
+    );
+  });
+
+  // ══════════════════════════════════════════
+  //  PATIENT LIST VIEW
+  // ══════════════════════════════════════════
+  if (listView) {
+    const allChecked = searchedPatients.length > 0 && checkedIds.length === searchedPatients.length;
+    const thStyle: CSSProperties = { padding: '9px 12px', fontSize: 11, fontWeight: 700, color: '#6B7280', textAlign: 'left', background: '#F9FAFB', borderBottom: '1px solid #E5E7EB', whiteSpace: 'nowrap' };
+    const tdStyle: CSSProperties = { padding: '10px 12px', fontSize: 13, color: '#374151', borderBottom: '1px solid #F3F4F6', verticalAlign: 'middle' };
+
+    return (
+      <>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: '#F5F6F8' }}>
+
+        {/* Header */}
+        <div style={{ padding: '20px 24px 10px', background: '#F5F6F8' }}>
+          <div style={{ fontSize: 22, fontWeight: 700, color: '#111827', marginBottom: 12 }}>Prontuários</div>
+
+          {/* Search bar */}
+          <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+            <input
+              value={search} onChange={e => setSearch(e.target.value)}
+              placeholder="Digite o nome, código, telefone ou CPF..."
+              style={{ width: '100%', height: 40, border: '1px solid #E5E7EB', borderRadius: 7, padding: '0 40px 0 14px', fontSize: 13, color: '#374151', fontFamily: 'inherit', outline: 'none', background: '#fff', boxSizing: 'border-box' }}
+            />
+            <div style={{ position: 'absolute', right: 48, top: '50%', transform: 'translateY(-50%)', height: '60%', width: 1, background: '#E5E7EB' }} />
+            <span style={{ position: 'absolute', right: 14, fontSize: 12, color: '#9CA3AF', whiteSpace: 'nowrap', pointerEvents: 'none' }}>
+              Todos os profissionais ▾
+            </span>
+            <span style={{ position: 'absolute', right: 180, fontSize: 15, color: '#9CA3AF' }}>🔍</span>
+          </div>
+        </div>
+
+        {/* Table area */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '0 24px 20px' }}>
+          <div style={{ background: '#fff', border: '1px solid #E5E7EB', borderRadius: 8, overflow: 'hidden' }}>
+
+            {/* Toolbar */}
+            <div style={{ padding: '10px 12px', borderBottom: '1px solid #E5E7EB', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button style={{ height: 32, padding: '0 10px', border: '1px solid #E5E7EB', borderRadius: 6, background: '#fff', fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}>
+                  ✓ <span style={{ color: '#6B7280' }}>▾</span>
+                </button>
+              </div>
+              <button
+                onClick={() => {/* future: new patient */}}
+                style={{ height: 34, padding: '0 16px', background: '#0066D0', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', letterSpacing: 0.3 }}
+              >
+                NOVO PACIENTE
+              </button>
+            </div>
+
+            {/* Table */}
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr>
+                    <th style={{ ...thStyle, width: 36 }}>
+                      <input type="checkbox" checked={allChecked}
+                        onChange={e => setCheckedIds(e.target.checked ? searchedPatients.map(p => p.id) : [])}
+                        style={{ cursor: 'pointer' }} />
+                    </th>
+                    <th style={thStyle}>NOME</th>
+                    <th style={thStyle}>TELEFONE</th>
+                    <th style={thStyle}>CÓDIGO</th>
+                    <th style={thStyle}>ÚLTIMA CONSULTA</th>
+                    <th style={thStyle}>DATA DE NASCIMENTO</th>
+                    <th style={thStyle}>CONVÊNIOS</th>
+                    <th style={{ ...thStyle, width: 40 }}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {searchedPatients.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} style={{ padding: '40px 12px', textAlign: 'center', color: '#9CA3AF', fontSize: 13 }}>
+                        Nenhum paciente encontrado
+                      </td>
+                    </tr>
+                  ) : searchedPatients.map(p => {
+                    const lastC = lastConsults[p.id];
+                    return (
+                      <tr key={p.id} style={{ background: checkedIds.includes(p.id) ? '#EFF6FF' : '#fff' }}
+                        onMouseEnter={e => { if (!checkedIds.includes(p.id)) (e.currentTarget as HTMLElement).style.background = '#F9FAFB'; }}
+                        onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = checkedIds.includes(p.id) ? '#EFF6FF' : '#fff'; }}
+                      >
+                        <td style={{ ...tdStyle, width: 36 }}>
+                          <input type="checkbox" checked={checkedIds.includes(p.id)}
+                            onChange={e => setCheckedIds(prev => e.target.checked ? [...prev, p.id] : prev.filter(id => id !== p.id))}
+                            style={{ cursor: 'pointer' }} />
+                        </td>
+                        {/* Clickable name */}
+                        <td style={tdStyle}>
+                          <span
+                            onClick={() => { setSelected(p); setListView(false); setActiveSection('historico'); }}
+                            style={{ color: '#0066D0', fontWeight: 500, cursor: 'pointer', textDecoration: 'none' }}
+                            onMouseEnter={e => (e.currentTarget as HTMLElement).style.textDecoration = 'underline'}
+                            onMouseLeave={e => (e.currentTarget as HTMLElement).style.textDecoration = 'none'}
+                          >
+                            {p.name}
+                          </span>
+                        </td>
+                        <td style={{ ...tdStyle, color: '#0066D0' }}>{p.phone ?? '—'}</td>
+                        <td style={tdStyle}>{patientCode(p.id)}</td>
+                        <td style={tdStyle}>
+                          {lastC ? new Date(lastC).toLocaleDateString('pt-BR') : '—'}
+                        </td>
+                        <td style={tdStyle}>
+                          {p.birth_date ? new Date(p.birth_date + 'T12:00:00').toLocaleDateString('pt-BR') : '—'}
+                        </td>
+                        <td style={tdStyle}>{p.insurance ?? 'Particular'}</td>
+                        <td style={{ ...tdStyle, textAlign: 'center' }}>
+                          <span style={{ color: '#0066D0', cursor: 'pointer', fontSize: 15 }}
+                            onClick={() => { setSelected(p); setListView(false); setActiveSection('historico'); }}
+                          >✏</span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Footer count */}
+          <div style={{ padding: '10px 4px', fontSize: 12, color: '#6B7280' }}>
+            {searchedPatients.length} resultado{searchedPatients.length !== 1 ? 's' : ''}
+          </div>
+        </div>
+      </div>
+      </>
+    );
+  }
+
   return (
     <>
     <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
@@ -1594,32 +1755,41 @@ function Prontuario({ initialPatientId }: { initialPatientId?: string }) {
       {/* ══ LEFT SIDEBAR ══ */}
       <div style={{ width: 210, borderRight: '1px solid #E5E7EB', background: '#fff', flexShrink: 0, display: 'flex', flexDirection: 'column' }}>
 
-        {/* Title + Iniciar */}
-        <div style={{ padding: '14px 12px', borderBottom: '1px solid #E5E7EB' }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: '#111827', marginBottom: 12 }}>Prontuário</div>
-          <button
-            onClick={() => { if (selected) { setShowConsulta(true); setTimerActive(true); setTimerSecs(0); } }}
-            style={{ width: '100%', height: 36, background: '#0066D0', color: '#fff', border: 'none', borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
-          >
-            <Icon name="clock" size={13} color="#fff" /> Iniciar atendimento
+        {/* Title + back + timer button */}
+        <div style={{ padding: '14px 12px', borderBottom: '1px solid #E5E7EB', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {/* Back link */}
+          <button onClick={() => { setListView(true); setTimerActive(false); setTimerSecs(0); }}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, color: '#6B7280', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 4, padding: 0, marginBottom: 2 }}>
+            ← Prontuários
           </button>
-        </div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#111827', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+            {selected?.name}
+          </div>
 
-        {/* Timer */}
-        <div style={{ padding: '10px 12px', borderBottom: '1px solid #F3F4F6', display: 'flex', alignItems: 'center', gap: 6 }}>
-          <Icon name="clock" size={12} color="#9CA3AF" />
-          <span style={{ fontSize: 11, color: '#9CA3AF' }}>Duração</span>
-          <span style={{ fontSize: 12, fontFamily: 'monospace', color: timerActive ? '#0066D0' : '#9CA3AF', marginLeft: 'auto', letterSpacing: 1 }}>
-            {timerStr}
-          </span>
-        </div>
-
-        {/* Patient selector */}
-        <div style={{ padding: '8px 10px', borderBottom: '1px solid #F3F4F6' }}>
-          <select value={selected?.id ?? ''} onChange={e => setSelected(patients.find(p => p.id === e.target.value) ?? null)}
-            style={{ width: '100%', height: 30, border: '1px solid #E5E7EB', borderRadius: 5, padding: '0 6px', fontSize: 12, color: '#111827', background: '#fff', fontFamily: 'inherit' }}>
-            {patients.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
+          {/* Timer / Iniciar / Encerrar button */}
+          {!timerActive ? (
+            <button
+              onClick={() => { if (selected) { setTimerActive(true); setTimerSecs(0); } }}
+              style={{ width: '100%', height: 36, background: '#0066D0', color: '#fff', border: 'none', borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+            >
+              <Icon name="clock" size={13} color="#fff" /> Iniciar atendimento
+            </button>
+          ) : (
+            <div style={{ display: 'flex', borderRadius: 7, overflow: 'hidden', border: '1px solid #0066D0' }}>
+              {/* Timer display */}
+              <div style={{ flex: 1, background: '#EFF6FF', padding: '0 8px', display: 'flex', alignItems: 'center', gap: 5, height: 36 }}>
+                <span style={{ fontSize: 11 }}>⏱</span>
+                <span style={{ fontFamily: 'monospace', fontSize: 13, fontWeight: 700, color: '#0066D0', letterSpacing: 1 }}>{timerStr}</span>
+              </div>
+              {/* Encerrar */}
+              <button
+                onClick={() => { setTimerActive(false); setShowConsulta(true); }}
+                style={{ height: 36, padding: '0 10px', background: '#DC2626', color: '#fff', border: 'none', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0 }}
+              >
+                Encerrar
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Nav sections */}
