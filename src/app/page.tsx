@@ -320,8 +320,8 @@ interface Patient {
   birth_date?: string; gender?: string; insurance?: string;
 }
 interface Appointment {
-  id: string; patient_id: string; date: string; start_time: string; end_time: string;
-  type: string; status: string; notes?: string;
+  id: string; patient_id: string; doctor_id?: string; date: string; start_time: string; end_time: string;
+  type: string; status: string; notes?: string; insurance?: string;
   patients?: Patient;
 }
 interface Transaction {
@@ -2883,6 +2883,31 @@ function ConsultaModal({ patient, onClose, onSaved }: { patient: Patient; onClos
 }
 
 /* ─────────────────────────────────────────
+   DONUT CHART (SVG ring)
+───────────────────────────────────────── */
+function DonutChart({ pct, size = 100, stroke = 16, color = '#60A5FA', bg = '#E5E7EB', children }: {
+  pct: number; size?: number; stroke?: number; color?: string; bg?: string; children?: React.ReactNode;
+}) {
+  const r    = (size - stroke) / 2;
+  const circ = 2 * Math.PI * r;
+  const off  = circ - (Math.min(Math.max(pct, 0), 100) / 100) * circ;
+  return (
+    <div style={{ position: 'relative', width: size, height: size, flexShrink: 0 }}>
+      <svg width={size} height={size} style={{ transform: 'rotate(-90deg)', display: 'block' }}>
+        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={bg}    strokeWidth={stroke} />
+        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth={stroke}
+          strokeDasharray={String(circ)} strokeDashoffset={String(off)} strokeLinecap="round" />
+      </svg>
+      {children && (
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────
    RELATÓRIOS SCREEN
 ───────────────────────────────────────── */
 const PROC_TYPES_REL = [
@@ -2892,11 +2917,20 @@ const PROC_TYPES_REL = [
 ];
 
 function Relatorios() {
-  const [period, setPeriod]           = useState('mes');
+  type Doctor = { id: string; name: string };
+  const [period,      setPeriod]      = useState('mes');
+  const [profFilter,  setProfFilter]  = useState('todos');
+  const [doctors,     setDoctors]     = useState<Doctor[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
-  const [totalPatients, setTotalPts]  = useState(0);
-  const [loading, setLoading]         = useState(true);
+  const [allPatients, setAllPts]      = useState<Patient[]>([]);
+  const [avgDurMin,   setAvgDur]      = useState(0);
+  const [loading,     setLoading]     = useState(true);
+
+  useEffect(() => {
+    supabase.from('doctors').select('id,name').eq('active', true)
+      .then(({ data }) => setDoctors((data as Doctor[]) ?? []));
+  }, []);
 
   useEffect(() => {
     const now = new Date();
@@ -2905,138 +2939,325 @@ function Relatorios() {
     else if (period === 'mes') start = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
     else start = new Date(now.getFullYear(), 0, 1).toISOString().split('T')[0];
     setLoading(true);
+
+    let apptQ = supabase.from('appointments').select('*').gte('date', start);
+    if (profFilter !== 'todos') apptQ = apptQ.eq('doctor_id', profFilter);
+
     Promise.all([
       supabase.from('transactions').select('*').gte('date', start).order('date'),
-      supabase.from('appointments').select('id,type,status,date').gte('date', start),
-      supabase.from('patients').select('id', { count: 'exact', head: true }).eq('active', true),
-    ]).then(([txn, appt, pts]) => {
+      apptQ,
+      supabase.from('patients').select('id,name,gender,insurance,created_at').eq('active', true),
+      supabase.from('medical_records').select('duration_seconds').gte('created_at', start + 'T00:00:00').not('duration_seconds', 'is', null),
+    ]).then(([txn, appt, pts, recs]) => {
       setTransactions((txn.data as Transaction[]) ?? []);
       setAppointments((appt.data as Appointment[]) ?? []);
-      setTotalPts(pts.count ?? 0);
+      setAllPts((pts.data as Patient[]) ?? []);
+      const durRecs = (recs.data as { duration_seconds: number }[]) ?? [];
+      if (durRecs.length > 0) {
+        setAvgDur(Math.round(durRecs.reduce((s, r) => s + r.duration_seconds, 0) / durRecs.length / 60));
+      } else {
+        const TYPE_DUR: Record<string, number> = { consulta:30, retorno:15, primeira_consulta:45, avaliacao:30, exame:60, procedimento:45, teleconsulta:20 };
+        const apptData = (appt.data as Appointment[]) ?? [];
+        setAvgDur(apptData.length > 0 ? Math.round(apptData.reduce((s, a) => s + (TYPE_DUR[a.type] ?? 30), 0) / apptData.length) : 0);
+      }
       setLoading(false);
     });
-  }, [period]);
+  }, [period, profFilter]);
 
-  const receitas = transactions.filter(t => t.type === 'receita').reduce((s,t) => s + Number(t.amount), 0);
-  const despesas = transactions.filter(t => t.type === 'despesa').reduce((s,t) => s + Number(t.amount), 0);
-  const concluidos = appointments.filter(a => a.status === 'concluido').length;
-  const faltaram = appointments.filter(a => a.status === 'faltou').length;
-  const taxaComp = appointments.length > 0 ? Math.round(concluidos / appointments.length * 100) : 0;
+  /* ── derived ── */
+  const receitas    = transactions.filter(t => t.type === 'receita').reduce((s, t) => s + Number(t.amount), 0);
+  const despesas    = transactions.filter(t => t.type === 'despesa').reduce((s, t) => s + Number(t.amount), 0);
+  const concluidos  = appointments.filter(a => a.status === 'concluido').length;
+  const faltaram    = appointments.filter(a => a.status === 'faltou').length;
+  const confirmados = appointments.filter(a => ['confirmado','aguardando','em_atendimento','concluido'].includes(a.status)).length;
+  const taxaComp    = appointments.length > 0 ? Math.round(concluidos / appointments.length * 100) : 0;
+  const totalPts    = allPatients.length;
 
-  const byType = PROC_TYPES_REL.map(t => ({ label: t.label, count: appointments.filter(a => a.type === t.value).length }))
-    .filter(t => t.count > 0).sort((a,b) => b.count - a.count);
+  const now2 = new Date();
+  const periodStart = period === 'semana' ? weekRange().start
+    : period === 'mes' ? new Date(now2.getFullYear(), now2.getMonth(), 1).toISOString().split('T')[0]
+    : new Date(now2.getFullYear(), 0, 1).toISOString().split('T')[0];
+
+  const novos       = allPatients.filter(p => ((p as any).created_at ?? '').slice(0, 10) >= periodStart).length;
+  const recorrentes = Math.max(0, totalPts - novos);
+  const novosPct    = totalPts > 0 ? Math.round(novos / totalPts * 100) : 0;
+  const homens      = allPatients.filter(p => p.gender === 'M').length;
+  const mulheres    = allPatients.filter(p => p.gender === 'F').length;
+  const homensPct   = totalPts > 0 ? Math.round(homens  / totalPts * 100) : 0;
+  const mulheresPct = totalPts > 0 ? Math.round(mulheres / totalPts * 100) : 0;
+
+  const convenioAppts   = appointments.filter(a => a.insurance && a.insurance !== 'Particular').length;
+  const particularAppts = appointments.length - convenioAppts;
+  const convenioPct     = appointments.length > 0 ? Math.round(convenioAppts   / appointments.length * 100) : 0;
+  const particularPct   = appointments.length > 0 ? Math.round(particularAppts / appointments.length * 100) : 0;
+
+  const PROC_COLORS = ['#F59E0B','#0066D0','#10B981','#7C3AED','#EF4444','#EC4899','#06B6D4'];
+  const byType    = PROC_TYPES_REL.map(t => ({ label: t.label, count: appointments.filter(a => a.type === t.value).length }))
+    .filter(t => t.count > 0).sort((a, b) => b.count - a.count);
   const maxByType = Math.max(...byType.map(t => t.count), 1);
+  const totalProcs = byType.reduce((s, t) => s + t.count, 0);
 
   const byPayment = Object.entries(
     transactions.filter(t => t.type === 'receita' && t.payment_method)
-      .reduce((acc,t) => { const k = t.payment_method!; acc[k] = (acc[k]||0) + Number(t.amount); return acc; }, {} as Record<string,number>)
-  ).sort((a,b) => b[1] - a[1]);
+      .reduce((acc, t) => { const k = t.payment_method!; acc[k] = (acc[k] || 0) + Number(t.amount); return acc; }, {} as Record<string, number>)
+  ).sort((a, b) => b[1] - a[1]);
+  const PAY_LABELS: Record<string, string> = { dinheiro:'Dinheiro', cartao_credito:'Cartão Crédito', cartao_debito:'Cartão Débito', pix:'PIX', transferencia:'Transferência', convenio:'Convênio', boleto:'Boleto' };
 
-  const PAY_LABELS: Record<string,string> = { dinheiro:'Dinheiro', cartao_credito:'Cartão Crédito', cartao_debito:'Cartão Débito', pix:'PIX', transferencia:'Transferência', convenio:'Convênio', boleto:'Boleto' };
+  const exportCSV = () => {
+    const rows = [
+      ['Data','Tipo','Descrição','Categoria','Valor','Forma Pgto','Status'],
+      ...transactions.map(t => [t.date, t.type, t.description ?? '', t.category ?? '', String(t.amount), t.payment_method ?? '', t.status]),
+    ];
+    const csv  = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+    a.download = `relatorio_${period}_${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+  };
 
   return (
     <div style={{ flex:1, overflowY:'auto', padding:'20px 22px', background:'#F9FAFB', display:'flex', flexDirection:'column', gap:16 }}>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+
+      {/* ── Header ── */}
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:8 }}>
         <div style={{ fontSize:18, fontWeight:600, color:'#111827' }}>Relatórios</div>
-        <div style={{ display:'flex', gap:8, alignItems:'center' }}>
-          <span style={{ fontSize:13, color:'#6B7280' }}>Período:</span>
-          <select value={period} onChange={e => setPeriod(e.target.value)} style={{ height:32, border:'1px solid #E5E7EB', borderRadius:6, padding:'0 8px', fontSize:13, color:'#111827', background:'#fff', fontFamily:'inherit' }}>
+        <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+          <span style={{ fontSize:13, color:'#6B7280' }}>Período</span>
+          <select value={period} onChange={e => setPeriod(e.target.value)}
+            style={{ height:32, border:'1px solid #E5E7EB', borderRadius:6, padding:'0 8px', fontSize:13, color:'#111827', background:'#fff', fontFamily:'inherit' }}>
             <option value="semana">Esta semana</option>
             <option value="mes">Este mês</option>
             <option value="ano">Este ano</option>
           </select>
-          <button onClick={() => {
-            const rows = [
-              ['Data','Tipo','Descrição','Categoria','Valor','Forma Pgto','Status'],
-              ...transactions.map(t => [t.date, t.type, t.description??'', t.category??'', String(t.amount), t.payment_method??'', t.status])
-            ];
-            const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
-            const blob = new Blob(['﻿'+csv], { type:'text/csv;charset=utf-8;' });
-            const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-            a.download = `relatorio_${period}_${new Date().toISOString().slice(0,10)}.csv`; a.click();
-          }} style={{ height:32, padding:'0 14px', background:'#0066D0', color:'#fff', border:'none', borderRadius:6, fontSize:12, fontWeight:600, cursor:'pointer', fontFamily:'inherit', display:'flex', alignItems:'center', gap:5 }}>
+          <span style={{ fontSize:13, color:'#6B7280' }}>Profissional</span>
+          <select value={profFilter} onChange={e => setProfFilter(e.target.value)}
+            style={{ height:32, border:'1px solid #E5E7EB', borderRadius:6, padding:'0 8px', fontSize:13, color:'#111827', background:'#fff', fontFamily:'inherit', minWidth:170 }}>
+            <option value="todos">Todos</option>
+            {doctors.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+          </select>
+          <button onClick={exportCSV}
+            style={{ height:32, padding:'0 14px', background:'#0066D0', color:'#fff', border:'none', borderRadius:6, fontSize:12, fontWeight:600, cursor:'pointer', fontFamily:'inherit', display:'flex', alignItems:'center', gap:5 }}>
             <Icon name="download" size={13} color="#fff" /> Exportar CSV
           </button>
         </div>
       </div>
 
-      {loading ? <Spinner /> : (
-        <>
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:12 }}>
-            {[
-              { label:'Receita Total',   value:fmtCurrency(receitas),            color:'#10B981', bg:'#D1FAE5', icon:'dollar' },
-              { label:'Despesa Total',   value:fmtCurrency(despesas),            color:'#EF4444', bg:'#FEE2E2', icon:'dollar' },
-              { label:'Resultado',       value:fmtCurrency(receitas - despesas), color:receitas-despesas>=0?'#0066D0':'#EF4444', bg:'#EFF6FF', icon:'chart' },
-              { label:'Total Pacientes', value:String(totalPatients),            color:'#7C3AED', bg:'#F3E8FF', icon:'users' },
-            ].map((k,i) => (
-              <Card key={i} style={{ padding:'14px 16px' }}>
-                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:8 }}>
-                  <span style={{ fontSize:12, fontWeight:500, color:'#6B7280' }}>{k.label}</span>
-                  <div style={{ width:30, height:30, borderRadius:7, background:k.bg, display:'flex', alignItems:'center', justifyContent:'center' }}><Icon name={k.icon} size={14} color={k.color} /></div>
-                </div>
-                <div style={{ fontSize:20, fontWeight:700, color:k.color }}>{k.value}</div>
-              </Card>
-            ))}
-          </div>
+      {loading ? <Spinner /> : (<>
 
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14 }}>
-            <Card style={{ padding:'14px 16px' }}>
-              <div style={{ fontSize:13, fontWeight:600, color:'#111827', marginBottom:14 }}>Resumo de Atendimentos</div>
-              {[
-                { label:'Total agendado',         value:appointments.length,    color:'#0066D0' },
-                { label:'Concluídos',             value:concluidos,             color:'#10B981' },
-                { label:'Faltaram',               value:faltaram,               color:'#EF4444' },
-                { label:'Taxa de comparecimento', value:taxaComp+'%',           color:'#7C3AED' },
-              ].map((row,i) => (
-                <div key={i} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'8px 0', borderBottom:i<3?'1px solid #F3F4F6':'none' }}>
-                  <span style={{ fontSize:13, color:'#374151' }}>{row.label}</span>
-                  <span style={{ fontSize:14, fontWeight:700, color:row.color }}>{row.value}</span>
+        {/* ── Appointment KPIs (like screenshot) ── */}
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:12 }}>
+          {([
+            { label:'Pacientes agendados',    value: appointments.length, numColor:'#374151', iconBg:'#F3F4F6', iconColor:'#6B7280', icon:'calendar' },
+            { label:'Pacientes confirmados',  value: confirmados,          numColor:'#0066D0', iconBg:'#EFF6FF', iconColor:'#0066D0', icon:'check' },
+            { label:'Pacientes atendidos',    value: concluidos,           numColor:'#10B981', iconBg:'#D1FAE5', iconColor:'#10B981', icon:'check' },
+            { label:'Pacientes que faltaram', value: faltaram,             numColor:'#EF4444', iconBg:'#FEE2E2', iconColor:'#EF4444', icon:'bell' },
+          ] as const).map((k, i) => (
+            <Card key={i} style={{ padding:'16px 14px', display:'flex', flexDirection:'column', alignItems:'center', gap:4, textAlign:'center' }}>
+              <div style={{ fontSize:36, fontWeight:700, color:k.numColor, lineHeight:1 }}>{k.value}</div>
+              <div style={{ fontSize:12, color:'#6B7280', marginBottom:4 }}>{k.label}</div>
+              <div style={{ width:34, height:34, borderRadius:9, background:k.iconBg, display:'flex', alignItems:'center', justifyContent:'center' }}>
+                <Icon name={k.icon} size={16} color={k.iconColor} />
+              </div>
+            </Card>
+          ))}
+        </div>
+
+        {/* ── Financial KPIs ── */}
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:12 }}>
+          {[
+            { label:'Receita Total',   value:fmtCurrency(receitas),            color:'#10B981', bg:'#D1FAE5', icon:'dollar' },
+            { label:'Despesa Total',   value:fmtCurrency(despesas),            color:'#EF4444', bg:'#FEE2E2', icon:'dollar' },
+            { label:'Resultado',       value:fmtCurrency(receitas - despesas), color:receitas-despesas>=0?'#0066D0':'#EF4444', bg:'#EFF6FF', icon:'chart' },
+            { label:'Total Pacientes', value:String(totalPts),                 color:'#7C3AED', bg:'#F3E8FF', icon:'users' },
+          ].map((k, i) => (
+            <Card key={i} style={{ padding:'14px 16px' }}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:8 }}>
+                <span style={{ fontSize:12, fontWeight:500, color:'#6B7280' }}>{k.label}</span>
+                <div style={{ width:30, height:30, borderRadius:7, background:k.bg, display:'flex', alignItems:'center', justifyContent:'center' }}>
+                  <Icon name={k.icon} size={14} color={k.color} />
+                </div>
+              </div>
+              <div style={{ fontSize:20, fontWeight:700, color:k.color }}>{k.value}</div>
+            </Card>
+          ))}
+        </div>
+
+        {/* ── 4 Visual Analytics Cards ── */}
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:12 }}>
+
+          {/* Card 1 — Pacientes (Novos vs Recorrentes + Gênero) */}
+          <Card style={{ padding:'14px 16px' }}>
+            <div style={{ fontSize:13, fontWeight:600, color:'#0066D0', marginBottom:10 }}>Pacientes</div>
+            <div style={{ display:'flex', justifyContent:'center', marginBottom:8 }}>
+              <DonutChart pct={novosPct} size={108} stroke={18} color="#60A5FA" bg="#BAE6FD">
+                <div style={{ textAlign:'center' }}>
+                  <div style={{ fontSize:20, fontWeight:700, color:'#111827' }}>{totalPts}</div>
+                  <div style={{ fontSize:10, color:'#9CA3AF' }}>Pacientes</div>
+                </div>
+              </DonutChart>
+            </div>
+            <div style={{ display:'flex', gap:10, justifyContent:'center', marginBottom:10 }}>
+              {[{ label:'Novos', color:'#60A5FA', val:novos }, { label:'Recorrentes', color:'#BAE6FD', val:recorrentes }].map((l, i) => (
+                <div key={i} style={{ display:'flex', alignItems:'center', gap:4, fontSize:11, color:'#6B7280' }}>
+                  <div style={{ width:8, height:8, borderRadius:'50%', background:l.color }} />
+                  {l.label} ({l.val})
                 </div>
               ))}
-            </Card>
-
-            <Card style={{ padding:'14px 16px' }}>
-              <div style={{ fontSize:13, fontWeight:600, color:'#111827', marginBottom:14 }}>Procedimentos Realizados</div>
-              {byType.length === 0
-                ? <div style={{ textAlign:'center', color:'#9CA3AF', fontSize:13, padding:'20px 0' }}>Nenhum atendimento no período</div>
-                : <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
-                    {byType.map((t,i) => (
-                      <div key={i}>
-                        <div style={{ display:'flex', justifyContent:'space-between', marginBottom:3 }}>
-                          <span style={{ fontSize:12, color:'#374151' }}>{t.label}</span>
-                          <span style={{ fontSize:12, fontWeight:600, color:'#111827' }}>{t.count}</span>
-                        </div>
-                        <div style={{ height:6, background:'#F3F4F6', borderRadius:9999, overflow:'hidden' }}>
-                          <div style={{ height:'100%', width:Math.round(t.count/maxByType*100)+'%', background:'#0066D0', borderRadius:9999 }} />
-                        </div>
-                      </div>
-                    ))}
+            </div>
+            <div style={{ display:'flex', justifyContent:'space-around' }}>
+              {[
+                { label:'Homens',  pct:homensPct,   total:homens,   color:'#0066D0', bg:'#DBEAFE' },
+                { label:'Mulheres', pct:mulheresPct, total:mulheres, color:'#EC4899', bg:'#FCE7F3' },
+              ].map((g, i) => (
+                <div key={i} style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:3 }}>
+                  <DonutChart pct={g.pct} size={42} stroke={7} color={g.color} bg={g.bg}>
+                    <span style={{ fontSize:9, fontWeight:700, color:g.color }}>{g.pct}%</span>
+                  </DonutChart>
+                  <div style={{ textAlign:'center' }}>
+                    <div style={{ fontSize:11, fontWeight:600, color:g.color }}>{g.label}</div>
+                    <div style={{ fontSize:10, color:'#9CA3AF' }}>Total: {g.total}</div>
                   </div>
-              }
-            </Card>
-          </div>
+                </div>
+              ))}
+            </div>
+          </Card>
+
+          {/* Card 2 — Procedimentos realizados */}
+          <Card style={{ padding:'14px 16px' }}>
+            <div style={{ fontSize:13, fontWeight:600, color:'#0066D0', marginBottom:10 }}>Procedimentos realizados</div>
+            <div style={{ display:'flex', justifyContent:'center', marginBottom:10 }}>
+              <DonutChart pct={totalProcs > 0 ? 100 : 0} size={108} stroke={18} color={PROC_COLORS[0]} bg="#E5E7EB">
+                <div style={{ textAlign:'center' }}>
+                  <div style={{ fontSize:26, fontWeight:700, color:'#111827' }}>{totalProcs}</div>
+                  <div style={{ fontSize:10, color:'#9CA3AF' }}>Procedimentos</div>
+                </div>
+              </DonutChart>
+            </div>
+            {byType.length === 0
+              ? <div style={{ textAlign:'center', fontSize:11, color:'#9CA3AF' }}>Sem dados no período</div>
+              : <div style={{ display:'flex', flexDirection:'column', gap:5 }}>
+                  {byType.slice(0, 4).map((t, i) => (
+                    <div key={i} style={{ display:'flex', alignItems:'center', gap:5 }}>
+                      <div style={{ width:8, height:8, borderRadius:'50%', background:PROC_COLORS[i % PROC_COLORS.length], flexShrink:0 }} />
+                      <span style={{ flex:1, fontSize:11, color:'#6B7280', overflow:'hidden', whiteSpace:'nowrap', textOverflow:'ellipsis' }}>{t.label}</span>
+                      <span style={{ fontSize:11, fontWeight:600, color:'#111827' }}>{t.count}</span>
+                    </div>
+                  ))}
+                </div>
+            }
+          </Card>
+
+          {/* Card 3 — Pacientes x Convênio */}
+          <Card style={{ padding:'14px 16px' }}>
+            <div style={{ fontSize:13, fontWeight:600, color:'#0066D0', marginBottom:10 }}>Pacientes x Convênio</div>
+            <div style={{ display:'flex', justifyContent:'center', marginBottom:10 }}>
+              <DonutChart pct={particularPct} size={108} stroke={18} color="#60A5FA" bg="#FDE68A">
+                <div style={{ textAlign:'center' }}>
+                  <div style={{ fontSize:20, fontWeight:700, color:'#111827' }}>{appointments.length}</div>
+                  <div style={{ fontSize:10, color:'#9CA3AF' }}>Pacientes</div>
+                </div>
+              </DonutChart>
+            </div>
+            <div style={{ display:'flex', flexDirection:'column', gap:7 }}>
+              {[
+                { label:'Particular', count:particularAppts, pct:particularPct, color:'#60A5FA' },
+                { label:'Convênio',   count:convenioAppts,   pct:convenioPct,   color:'#F59E0B' },
+              ].map((row, i) => (
+                <div key={i} style={{ display:'flex', alignItems:'center', gap:6 }}>
+                  <div style={{ width:8, height:8, borderRadius:'50%', background:row.color, flexShrink:0 }} />
+                  <span style={{ flex:1, fontSize:12, color:'#6B7280' }}>{row.label}</span>
+                  <span style={{ fontSize:12, fontWeight:700, color:'#111827' }}>{row.count}</span>
+                  <span style={{ fontSize:11, color:'#9CA3AF', minWidth:30, textAlign:'right' }}>{row.pct}%</span>
+                </div>
+              ))}
+            </div>
+          </Card>
+
+          {/* Card 4 — Duração + Tipo de atendimento */}
+          <Card style={{ padding:'14px 16px' }}>
+            <div style={{ fontSize:13, fontWeight:600, color:'#0066D0', marginBottom:10 }}>Duração do atendimento</div>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:8, marginBottom:14 }}>
+              <Icon name="clock" size={22} color="#6B7280" />
+              <span style={{ fontSize:28, fontWeight:700, color:'#111827', fontStyle:'italic' }}>
+                {avgDurMin > 0 ? `${avgDurMin}min` : '—'}
+              </span>
+            </div>
+            <div style={{ fontSize:12, fontWeight:600, color:'#0066D0', marginBottom:8 }}>Tipo de atendimento</div>
+            {appointments.length === 0
+              ? <div style={{ textAlign:'center', fontSize:11, color:'#9CA3AF' }}>Sem dados no período</div>
+              : <div style={{ display:'flex', gap:10, alignItems:'flex-end', height:64, padding:'0 8px' }}>
+                  {[
+                    { label:'Particular', pct: particularPct, color:'#60A5FA' },
+                    { label:'Convênio',   pct: convenioPct,   color:'#E5E7EB' },
+                  ].map((b, i) => (
+                    <div key={i} style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:3 }}>
+                      <span style={{ fontSize:10, fontWeight:600, color:'#374151' }}>{b.pct}%</span>
+                      <div style={{ width:'100%', height: Math.max(b.pct * 0.5, 3), background:b.color, borderRadius:'3px 3px 0 0' }} />
+                      <span style={{ fontSize:9, color:'#9CA3AF', textAlign:'center', lineHeight:1.2 }}>{b.label}</span>
+                    </div>
+                  ))}
+                </div>
+            }
+          </Card>
+        </div>
+
+        {/* ── Detail tables (existing) ── */}
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14 }}>
+          <Card style={{ padding:'14px 16px' }}>
+            <div style={{ fontSize:13, fontWeight:600, color:'#111827', marginBottom:14 }}>Resumo de Atendimentos</div>
+            {[
+              { label:'Total agendado',         value: appointments.length, color:'#0066D0' },
+              { label:'Concluídos',             value: concluidos,          color:'#10B981' },
+              { label:'Faltaram',               value: faltaram,            color:'#EF4444' },
+              { label:'Taxa de comparecimento', value: taxaComp + '%',      color:'#7C3AED' },
+            ].map((row, i) => (
+              <div key={i} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'8px 0', borderBottom: i < 3 ? '1px solid #F3F4F6' : 'none' }}>
+                <span style={{ fontSize:13, color:'#374151' }}>{row.label}</span>
+                <span style={{ fontSize:14, fontWeight:700, color:row.color }}>{row.value}</span>
+              </div>
+            ))}
+          </Card>
 
           <Card style={{ padding:'14px 16px' }}>
-            <div style={{ fontSize:13, fontWeight:600, color:'#111827', marginBottom:14 }}>Receita por Forma de Pagamento</div>
-            {byPayment.length === 0
-              ? <div style={{ textAlign:'center', color:'#9CA3AF', fontSize:13, padding:'12px 0' }}>Nenhuma receita no período</div>
+            <div style={{ fontSize:13, fontWeight:600, color:'#111827', marginBottom:14 }}>Procedimentos por Tipo</div>
+            {byType.length === 0
+              ? <div style={{ textAlign:'center', color:'#9CA3AF', fontSize:13, padding:'20px 0' }}>Nenhum atendimento no período</div>
               : <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
-                  {byPayment.map(([key,val],i) => (
-                    <div key={i} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'8px 0', borderBottom:i<byPayment.length-1?'1px solid #F3F4F6':'none' }}>
-                      <span style={{ fontSize:13, color:'#374151' }}>{PAY_LABELS[key] ?? key}</span>
-                      <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-                        <div style={{ width:80, height:6, background:'#F3F4F6', borderRadius:9999, overflow:'hidden' }}>
-                          <div style={{ height:'100%', width:receitas>0?Math.round(val/receitas*100)+'%':'0%', background:'#10B981', borderRadius:9999 }} />
-                        </div>
-                        <span style={{ fontSize:13, fontWeight:600, color:'#10B981', minWidth:80, textAlign:'right' }}>{fmtCurrency(val)}</span>
+                  {byType.map((t, i) => (
+                    <div key={i}>
+                      <div style={{ display:'flex', justifyContent:'space-between', marginBottom:3 }}>
+                        <span style={{ fontSize:12, color:'#374151' }}>{t.label}</span>
+                        <span style={{ fontSize:12, fontWeight:600, color:'#111827' }}>{t.count}</span>
+                      </div>
+                      <div style={{ height:6, background:'#F3F4F6', borderRadius:9999, overflow:'hidden' }}>
+                        <div style={{ height:'100%', width: Math.round(t.count / maxByType * 100) + '%', background: PROC_COLORS[i % PROC_COLORS.length], borderRadius:9999 }} />
                       </div>
                     </div>
                   ))}
                 </div>
             }
           </Card>
-        </>
-      )}
+        </div>
+
+        <Card style={{ padding:'14px 16px' }}>
+          <div style={{ fontSize:13, fontWeight:600, color:'#111827', marginBottom:14 }}>Receita por Forma de Pagamento</div>
+          {byPayment.length === 0
+            ? <div style={{ textAlign:'center', color:'#9CA3AF', fontSize:13, padding:'12px 0' }}>Nenhuma receita no período</div>
+            : <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+                {byPayment.map(([key, val], i) => (
+                  <div key={i} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'8px 0', borderBottom: i < byPayment.length - 1 ? '1px solid #F3F4F6' : 'none' }}>
+                    <span style={{ fontSize:13, color:'#374151' }}>{PAY_LABELS[key] ?? key}</span>
+                    <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+                      <div style={{ width:80, height:6, background:'#F3F4F6', borderRadius:9999, overflow:'hidden' }}>
+                        <div style={{ height:'100%', width: receitas > 0 ? Math.round(val / receitas * 100) + '%' : '0%', background:'#10B981', borderRadius:9999 }} />
+                      </div>
+                      <span style={{ fontSize:13, fontWeight:600, color:'#10B981', minWidth:80, textAlign:'right' }}>{fmtCurrency(val)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+          }
+        </Card>
+      </>)}
     </div>
   );
 }
