@@ -1,6 +1,7 @@
 'use client';
 import React, { useState, useEffect, CSSProperties } from 'react';
 import { supabase } from '@/lib/supabase';
+import WeeklyCalendar from '@/components/calendar/WeeklyCalendar';
 
 /* ─────────────────────────────────────────
    ICON COMPONENT
@@ -898,99 +899,32 @@ function Dashboard({ onNavigateProntuario }: { onNavigateProntuario?: (patientId
    AGENDA SCREEN
 ───────────────────────────────────────── */
 function Agenda() {
-  const [view, setView]               = useState<'DIA' | 'SEMANA'>('SEMANA');
-  const [appointments, setAppointments] = useState<Appointment[]>([]);
-  const [loading, setLoading]         = useState(true);
   const [showAddAppt,  setShowAddAppt]  = useState(false);
   const [showWaitlist, setShowWaitlist] = useState(false);
 
-  const TIMES = ['08:00','08:15','08:30','08:45','09:00','09:15','09:30','09:45','10:00','10:15','10:30','10:45','11:00','11:15','11:30'];
-
-  const { start, end } = weekRange();
-
-  const agendaDays = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(start + 'T12:00:00');
-    d.setDate(d.getDate() + i);
-    const names = ['Domingo','Segunda','Terça','Quarta','Quinta','Sexta','Sábado'];
-    return {
-      name: names[d.getDay()],
-      date: d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' }),
-      iso:  d.toISOString().split('T')[0],
-      today: d.toISOString().split('T')[0] === todayISO(),
-      weekend: d.getDay() === 0 || d.getDay() === 6,
-    };
-  });
-
-  const loadAppointments = () => {
-    supabase.from('appointments')
-      .select('*, patients(id, name)')
-      .gte('date', start)
-      .lte('date', end)
-      .order('start_time')
-      .then(({ data }) => { setAppointments((data as Appointment[]) ?? []); setLoading(false); });
-  };
-
-  useEffect(() => { loadAppointments(); }, []);
-
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      <div style={{ padding: '12px 20px', background: '#fff', borderBottom: '1px solid #E5E7EB', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div style={{ fontSize: 16, fontWeight: 600, color: '#0066D0' }}>guilherme teixeira</div>
+      {/* Extra action bar (Lista de Espera / Imprimir) */}
+      <div style={{ padding: '8px 16px', background: '#fff', borderBottom: '1px solid #E5E7EB', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: '#0066D0' }}>guilherme teixeira</div>
         <div style={{ display: 'flex', gap: 6 }}>
           {[
-            { icon: 'plus',    label: 'Novo\nAgendamento', action: () => setShowAddAppt(true) },
-            { icon: 'list',    label: 'Lista de\nEspera',  action: () => setShowWaitlist(true) },
-            { icon: 'printer', label: 'Imprimir\nAgenda',  action: () => window.print() },
+            { icon: 'list',    label: 'Lista de Espera', action: () => setShowWaitlist(true) },
+            { icon: 'printer', label: 'Imprimir',        action: () => window.print() },
           ].map((a, i) => (
-            <button key={i} onClick={a.action} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, padding: '5px 10px', background: 'none', border: '1px solid #E5E7EB', borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit' }}>
-              <Icon name={a.icon} size={13} color="#6B7280" />
-              <span style={{ fontSize: 10, color: '#6B7280', whiteSpace: 'pre-line', textAlign: 'center', lineHeight: 1.2 }}>{a.label}</span>
+            <button key={i} onClick={a.action} style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '4px 10px', background: 'none', border: '1px solid #E5E7EB', borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit', fontSize: 12, color: '#374151' }}>
+              <Icon name={a.icon} size={12} color="#6B7280" /> {a.label}
             </button>
           ))}
         </div>
       </div>
-      <div style={{ padding: '8px 16px', background: '#fff', borderBottom: '1px solid #E5E7EB', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ fontSize: 13, color: '#374151' }}>{agendaDays[0].date} – {agendaDays[6].date}</span>
-        </div>
-        <div style={{ display: 'flex' }}>
-          {(['DIA', 'SEMANA'] as const).map(v => (
-            <button key={v} onClick={() => setView(v)} style={{ height: 28, padding: '0 12px', background: view === v ? '#EFF6FF' : '#fff', border: '1px solid #E5E7EB', fontSize: 12, fontWeight: view === v ? 600 : 400, color: view === v ? '#0066D0' : '#6B7280', cursor: 'pointer', fontFamily: 'inherit' }}>{v}</button>
-          ))}
-        </div>
+
+      {/* Google-Calendar-style weekly grid */}
+      <div style={{ flex: 1, overflow: 'hidden' }}>
+        <WeeklyCalendar />
       </div>
-      {loading ? <Spinner /> : (
-        <div style={{ flex: 1, overflow: 'auto' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '52px repeat(7,1fr)', minWidth: 700 }}>
-            <div style={{ borderRight: '1px solid #E5E7EB', borderBottom: '1px solid #E5E7EB' }} />
-            {agendaDays.map((d, i) => (
-              <div key={i} style={{ borderRight: '1px solid #E5E7EB', borderBottom: '1px solid #E5E7EB', padding: '8px 6px', textAlign: 'center', background: d.today ? '#EFF6FF' : d.weekend ? '#FAFAFA' : '#fff' }}>
-                <div style={{ fontSize: 11, fontWeight: 600, color: d.today ? '#0066D0' : '#374151' }}>{d.name}</div>
-                <div style={{ fontSize: 10, color: '#9CA3AF' }}>{d.date}</div>
-              </div>
-            ))}
-            {TIMES.map((t, ti) => (
-              <React.Fragment key={ti}>
-                <div style={{ borderRight: '1px solid #E5E7EB', borderBottom: '1px solid #F3F4F6', padding: '2px 6px', fontSize: 10, color: '#9CA3AF', textAlign: 'right' }}>{t}</div>
-                {agendaDays.map((d, di) => {
-                  const appts = appointments.filter(a => a.date === d.iso && a.start_time?.slice(0,5) === t);
-                  return (
-                    <div key={di} style={{ borderRight: '1px solid #E5E7EB', borderBottom: '1px solid #F3F4F6', minHeight: 24, background: d.weekend ? '#FAFAFA' : '#fff', padding: 2 }}>
-                      {appts.map(a => (
-                        <div key={a.id} style={{ background: '#B2EBF2', borderLeft: `3px solid ${STATUS_COLORS[a.status]?.color ?? '#00BCD4'}`, borderRadius: 3, padding: '3px 6px', fontSize: 10, color: '#006064', lineHeight: 1.3 }}>
-                          <div style={{ fontWeight: 600 }}>{a.start_time?.slice(0,5)}–{a.end_time?.slice(0,5)}</div>
-                          <div>{a.patients?.name ?? 'Paciente'}</div>
-                        </div>
-                      ))}
-                    </div>
-                  );
-                })}
-              </React.Fragment>
-            ))}
-          </div>
-        </div>
-      )}
-      {showAddAppt  && <AddAppointmentModal onClose={() => setShowAddAppt(false)}  onSaved={() => loadAppointments()} />}
+
+      {showAddAppt  && <AddAppointmentModal onClose={() => setShowAddAppt(false)} onSaved={() => {}} />}
       {showWaitlist && <WaitlistModal onClose={() => setShowWaitlist(false)} />}
     </div>
   );
