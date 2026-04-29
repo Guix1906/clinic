@@ -397,6 +397,44 @@ const AGENDA_TIMES: string[] = Array.from({ length: 29 }, (_, i) => {
   return `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`;
 });
 
+/* ── Brazilian holidays ── */
+function easterDate(year: number): Date {
+  const a = year % 19, b = Math.floor(year / 100), c = year % 100;
+  const d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4), k = c % 4, l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31);
+  const day   = ((h + l - 7 * m + 114) % 31) + 1;
+  return new Date(year, month - 1, day);
+}
+function addDays(d: Date, n: number): Date {
+  const r = new Date(d); r.setDate(r.getDate() + n); return r;
+}
+function isoDate(d: Date): string { return d.toISOString().split('T')[0]; }
+
+function getBrazilHolidays(year: number): Record<string, string> {
+  const easter = easterDate(year);
+  return {
+    // Feriados fixos nacionais
+    [`${year}-01-01`]: 'Confraternização Universal',
+    [`${year}-04-21`]: 'Tiradentes',
+    [`${year}-05-01`]: 'Dia do Trabalho',
+    [`${year}-09-07`]: 'Independência do Brasil',
+    [`${year}-10-12`]: 'Nossa Sra. Aparecida',
+    [`${year}-11-02`]: 'Finados',
+    [`${year}-11-15`]: 'Proclamação da República',
+    [`${year}-11-20`]: 'Consciência Negra',
+    [`${year}-12-25`]: 'Natal',
+    // Feriados móveis (base: Páscoa)
+    [isoDate(addDays(easter, -48))]: 'Carnaval (2ª)',
+    [isoDate(addDays(easter, -47))]: 'Carnaval',
+    [isoDate(addDays(easter,  -2))]: 'Sexta-feira Santa',
+    [isoDate(easter)]:               'Páscoa',
+    [isoDate(addDays(easter,  60))]: 'Corpus Christi',
+  };
+}
+
 const STATUS_COLORS: Record<string, { bg: string; color: string }> = {
   em_atendimento: { bg: '#DBEAFE', color: '#0066D0' },
   aguardando:     { bg: '#FEF3C7', color: '#92400E' },
@@ -919,16 +957,17 @@ function Dashboard({ onNavigateProntuario }: { onNavigateProntuario?: (patientId
 /* ─────────────────────────────────────────
    AGENDA — DND HELPERS
 ───────────────────────────────────────── */
-function DroppableSlot({ id, isWeekend, children }: {
-  id: string; isWeekend: boolean; children?: React.ReactNode;
+function DroppableSlot({ id, isWeekend, isHoliday, children }: {
+  id: string; isWeekend: boolean; isHoliday?: boolean; children?: React.ReactNode;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id });
+  const bg = isOver ? '#DBEAFE' : isHoliday ? '#FFF1F2' : isWeekend ? '#FAFAFA' : '#fff';
   return (
     <div ref={setNodeRef} style={{
       borderRight: '1px solid #E5E7EB',
       borderBottom: '1px solid #F3F4F6',
       minHeight: 28,
-      background: isOver ? '#DBEAFE' : isWeekend ? '#FAFAFA' : '#fff',
+      background: bg,
       padding: 2,
       transition: 'background .1s',
     }}>
@@ -986,7 +1025,8 @@ function Agenda() {
   const [activeAppt,   setActiveAppt]   = useState<Appointment | null>(null);
 
   const { start, end } = weekRange();
-  const today = todayISO();
+  const today    = todayISO();
+  const holidays = getBrazilHolidays(new Date().getFullYear());
 
   const allDays = Array.from({ length: 7 }, (_, i) => {
     const d = new Date(start + 'T12:00:00');
@@ -1101,16 +1141,33 @@ function Agenda() {
 
               {/* Header row */}
               <div style={{ borderRight: '1px solid #E5E7EB', borderBottom: '1px solid #E5E7EB', background: '#FAFAFA' }} />
-              {agendaDays.map((d, i) => (
-                <div key={i} style={{
-                  borderRight: '1px solid #E5E7EB', borderBottom: '1px solid #E5E7EB',
-                  padding: '8px 6px', textAlign: 'center',
-                  background: d.isToday ? '#EFF6FF' : d.weekend ? '#FAFAFA' : '#fff',
-                }}>
-                  <div style={{ fontSize: 11, fontWeight: 600, color: d.isToday ? '#0066D0' : '#374151' }}>{d.name}</div>
-                  <div style={{ fontSize: 10, color: '#9CA3AF' }}>{d.date}</div>
-                </div>
-              ))}
+              {agendaDays.map((d, i) => {
+                const holiday = holidays[d.iso];
+                return (
+                  <div key={i} style={{
+                    borderRight: '1px solid #E5E7EB', borderBottom: '1px solid #E5E7EB',
+                    padding: '6px 4px', textAlign: 'center',
+                    background: holiday ? '#FFF1F2' : d.isToday ? '#EFF6FF' : d.weekend ? '#FAFAFA' : '#fff',
+                  }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: holiday ? '#BE123C' : d.isToday ? '#0066D0' : '#374151' }}>
+                      {d.name}
+                    </div>
+                    <div style={{ fontSize: 10, color: holiday ? '#BE123C' : '#9CA3AF', fontWeight: holiday ? 600 : 400 }}>
+                      {d.date}
+                    </div>
+                    {holiday && (
+                      <div style={{
+                        fontSize: 9, color: '#BE123C', marginTop: 2, lineHeight: 1.2,
+                        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                        maxWidth: '100%', padding: '0 2px',
+                        background: '#FFE4E6', borderRadius: 3,
+                      }} title={holiday}>
+                        🇧🇷 {holiday}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
 
               {/* Time slots */}
               {AGENDA_TIMES.map((t, ti) => (
@@ -1130,7 +1187,7 @@ function Agenda() {
                       a => a.date === d.iso && a.start_time?.slice(0, 5) === t
                     );
                     return (
-                      <DroppableSlot key={di} id={`${d.iso}__${t}`} isWeekend={d.weekend}>
+                      <DroppableSlot key={di} id={`${d.iso}__${t}`} isWeekend={d.weekend} isHoliday={!!holidays[d.iso]}>
                         {slotAppts.map(a => <DraggableAppt key={a.id} appt={a} />)}
                       </DroppableSlot>
                     );
