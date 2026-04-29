@@ -1491,13 +1491,17 @@ function Prontuario({ initialPatientId }: { initialPatientId?: string }) {
   const [patients, setPatients]           = useState<Patient[]>([]);
   const [selected, setSelected]           = useState<Patient | null>(null);
   const [loading, setLoading]             = useState(true);
-  const [showConsulta, setShowConsulta]   = useState(false);
-  const [editRecord,   setEditRecord]     = useState<MedicalRecord | null>(null);
-  const [records, setRecords]             = useState<MedicalRecord[]>([]);
-  const [prescriptions, setPrescriptions] = useState<Prescription[]>([]);
-  const [showTagInput, setShowTagInput]   = useState(false);
-  const [tagLabel, setTagLabel]           = useState('');
-  const [tags, setTags]                   = useState<{id:string;label:string;color:string}[]>([]);
+  const [showConsulta,    setShowConsulta]    = useState(false);
+  const [editRecord,      setEditRecord]      = useState<MedicalRecord | null>(null);
+  const [records,         setRecords]         = useState<MedicalRecord[]>([]);
+  const [prescriptions,   setPrescriptions]   = useState<Prescription[]>([]);
+  const [showTagInput,    setShowTagInput]    = useState(false);
+  const [tagLabel,        setTagLabel]        = useState('');
+  const [tags,            setTags]            = useState<{id:string;label:string;color:string}[]>([]);
+  const [prescDate,       setPrescDate]       = useState(todayISO());
+  const [showPrescDate,   setShowPrescDate]   = useState(true);
+  const [prescModels,     setPrescModels]     = useState<{id:string;name:string;items:{med:string;dose:string;freq:string;dur:string}[]}[]>([]);
+  const [showCreatePresc, setShowCreatePresc] = useState(false);
 
   const loadTags = (patientId: string) => {
     supabase.from('patient_tags').select('*').eq('patient_id', patientId).order('created_at')
@@ -1687,28 +1691,224 @@ function Prontuario({ initialPatientId }: { initialPatientId?: string }) {
               </Card>
             )}
 
-            {activeSection === 'presc' && (
-              <Card>
-                <div style={{ padding: '10px 16px', borderBottom: '1px solid #F3F4F6', fontSize: 13, fontWeight: 600, color: '#111827' }}>Prescrições</div>
-                {prescriptions.length === 0
-                  ? <div style={{ padding: '24px 16px', textAlign: 'center', color: '#9CA3AF', fontSize: 13 }}>Nenhuma prescrição registrada</div>
-                  : prescriptions.map((rx, i) => (
-                    <div key={rx.id} style={{ padding: '12px 16px', borderBottom: i < prescriptions.length - 1 ? '1px solid #F3F4F6' : 'none' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                        <span style={{ fontSize: 13, fontWeight: 600, color: '#111827' }}>{rx.medication}</span>
-                        <span style={{ fontSize: 12, color: '#9CA3AF' }}>{new Date(rx.created_at).toLocaleDateString('pt-BR')}</span>
+            {activeSection === 'presc' && (() => {
+              // Group prescriptions by date (day)
+              const groups: { date: string; items: Prescription[] }[] = [];
+              const map: Record<string, Prescription[]> = {};
+              for (const rx of prescriptions) {
+                const day = rx.created_at.split('T')[0];
+                if (!map[day]) map[day] = [];
+                map[day].push(rx);
+              }
+              for (const [date, items] of Object.entries(map).sort((a, b) => b[0].localeCompare(a[0]))) {
+                groups.push({ date, items });
+              }
+              const mostRecent = prescriptions[0] ?? null;
+
+              return (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+
+                  {/* ── iClinic Rx widget ── */}
+                  <Card>
+                    {/* Header */}
+                    <div style={{ padding: '10px 14px', borderBottom: '1px solid #F3F4F6', display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <div style={{ width: 32, height: 32, background: '#1E40AF', borderRadius: 7, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                        <span style={{ color: '#fff', fontSize: 12, fontWeight: 800, fontStyle: 'italic' }}>Rx</span>
                       </div>
-                      <div style={{ fontSize: 12, color: '#374151' }}>
-                        {rx.dosage && <span>{rx.dosage}</span>}
-                        {rx.frequency && <span> · {rx.frequency}</span>}
-                        {rx.duration && <span> · {rx.duration}</span>}
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: '#111827' }}>iClinic Rx</div>
+                        <div style={{ fontSize: 11, color: '#9CA3AF' }}>Consulta: {selected?.name}</div>
                       </div>
-                      {rx.instructions && <div style={{ fontSize: 12, color: '#6B7280', marginTop: 4 }}>{rx.instructions}</div>}
+                      {/* Toggle mostrar data */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                        <span style={{ fontSize: 11, color: '#6B7280' }}>mostrar data</span>
+                        <div onClick={() => setShowPrescDate(p => !p)} style={{
+                          width: 36, height: 20, borderRadius: 10, position: 'relative', cursor: 'pointer',
+                          background: showPrescDate ? '#0066D0' : '#D1D5DB', transition: 'background .2s',
+                        }}>
+                          <div style={{
+                            position: 'absolute', top: 2, width: 16, height: 16, borderRadius: '50%',
+                            background: '#fff', transition: 'left .15s',
+                            left: showPrescDate ? 18 : 2, boxShadow: '0 1px 3px rgba(0,0,0,.2)',
+                          }} />
+                        </div>
+                        <input type="date" value={prescDate} onChange={e => setPrescDate(e.target.value)} style={{
+                          height: 28, border: '1px solid #D1D5DB', borderRadius: 6, padding: '0 8px',
+                          fontSize: 12, color: '#374151', fontFamily: 'inherit', outline: 'none',
+                        }} />
+                      </div>
+                      <button title="Configurações" style={{
+                        width: 28, height: 28, border: '1px solid #E5E7EB', borderRadius: 6,
+                        background: '#fff', cursor: 'pointer', fontSize: 14, color: '#6B7280',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      }}>⚙</button>
                     </div>
-                  ))
-                }
-              </Card>
-            )}
+
+                    {/* Criar Prescrição */}
+                    <div style={{ padding: '12px 14px', borderBottom: '1px solid #F3F4F6' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+                        <span style={{ fontSize: 16, color: '#0066D0' }}>✦</span>
+                        <span style={{ fontSize: 13, fontWeight: 600, color: '#111827' }}>Criar Prescrição</span>
+                      </div>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button onClick={() => {/* future: usar modelo */}} style={{
+                          height: 32, padding: '0 14px', border: '1px solid #0066D0', borderRadius: 6,
+                          background: '#fff', color: '#0066D0', fontSize: 12, fontWeight: 500,
+                          cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 5,
+                        }}>
+                          📋 Usar Modelo
+                        </button>
+                        <button onClick={() => setShowCreatePresc(true)} style={{
+                          height: 32, padding: '0 14px', border: 'none', borderRadius: 6,
+                          background: '#0066D0', color: '#fff', fontSize: 12, fontWeight: 600,
+                          cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 5,
+                        }}>
+                          ✦ Criar Item Em Branco
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Prescrições mais recentes */}
+                    <div style={{ padding: '12px 14px', borderBottom: '1px solid #F3F4F6' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                        <span style={{ fontSize: 12, fontWeight: 600, color: '#374151' }}>Prescrições mais recentes</span>
+                        <button style={{ fontSize: 11, color: '#0066D0', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 4 }}>
+                          📋 Ver Todo Histórico
+                        </button>
+                      </div>
+                      {mostRecent ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', background: '#F9FAFB', borderRadius: 7, border: '1px solid #E5E7EB' }}>
+                          <div style={{
+                            width: 36, height: 36, background: '#EFF6FF', borderRadius: 6,
+                            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                          }}>
+                            <span style={{ fontSize: 12, fontWeight: 700, color: '#1E40AF', lineHeight: 1 }}>
+                              {new Date(mostRecent.created_at).toLocaleDateString('pt-BR', { day: '2-digit' })}
+                            </span>
+                            <span style={{ fontSize: 9, color: '#1E40AF', fontWeight: 600 }}>
+                              {new Date(mostRecent.created_at).toLocaleDateString('pt-BR', { month: 'short' }).toUpperCase()}
+                            </span>
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0, fontSize: 12, color: '#374151', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+                            {mostRecent.medication}
+                            {groups[0]?.items.length > 1 ? ` + ${groups[0].items.length - 1} item(s) (...)` : ''}
+                          </div>
+                          <button style={{
+                            height: 26, padding: '0 10px', background: '#EFF6FF', border: '1px solid #BFDBFE',
+                            borderRadius: 5, color: '#1E40AF', fontSize: 11, fontWeight: 500,
+                            cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0,
+                          }}>
+                            Revisar Prescrição
+                          </button>
+                        </div>
+                      ) : (
+                        <div style={{ fontSize: 12, color: '#9CA3AF', textAlign: 'center', padding: '8px 0' }}>Nenhuma prescrição recente</div>
+                      )}
+                    </div>
+
+                    {/* Biblioteca de modelos */}
+                    <div style={{ padding: '12px 14px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span style={{ fontSize: 14 }}>📚</span>
+                          <span style={{ fontSize: 12, fontWeight: 600, color: '#374151' }}>Biblioteca de modelos</span>
+                        </div>
+                        <div style={{ display: 'flex', gap: 12 }}>
+                          <button style={{ fontSize: 11, color: '#6B7280', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>Dicas De Uso</button>
+                          <button style={{ fontSize: 11, color: '#6B7280', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>Gerenciar</button>
+                        </div>
+                      </div>
+                      {prescModels.length === 0 ? (
+                        <div style={{ border: '1.5px dashed #E5E7EB', borderRadius: 7, padding: '18px 12px', textAlign: 'center' }}>
+                          <div style={{ fontSize: 12, color: '#9CA3AF', marginBottom: 8 }}>Você não adicionou modelos</div>
+                          <button style={{
+                            fontSize: 12, color: '#0066D0', background: 'none', border: 'none',
+                            cursor: 'pointer', fontFamily: 'inherit', display: 'inline-flex', alignItems: 'center', gap: 4,
+                          }}>
+                            📋 Adicionar Modelo
+                          </button>
+                        </div>
+                      ) : prescModels.map((m, mi) => (
+                        <div key={m.id} style={{ padding: '8px 10px', background: '#F9FAFB', borderRadius: 6, border: '1px solid #E5E7EB', marginBottom: 6, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: 12, color: '#374151' }}>{m.name}</span>
+                          <button onClick={() => {/* future: apply model */}} style={{ fontSize: 11, color: '#0066D0', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>Usar</button>
+                        </div>
+                      ))}
+                    </div>
+                  </Card>
+
+                  {/* ── Historical prescription cards ── */}
+                  {groups.map(group => {
+                    const d = new Date(group.date + 'T12:00:00');
+                    const day   = d.toLocaleDateString('pt-BR', { day: '2-digit' });
+                    const month = d.toLocaleDateString('pt-BR', { month: 'short' }).toUpperCase().replace('.', '');
+                    const year  = d.getFullYear();
+                    const time  = group.items[0]
+                      ? new Date(group.items[0].created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+                      : '';
+                    return (
+                      <div key={group.date} style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                        {/* Date badge */}
+                        <div style={{
+                          width: 48, flexShrink: 0, background: '#1E40AF', borderRadius: 8,
+                          padding: '8px 4px', textAlign: 'center', color: '#fff',
+                        }}>
+                          <div style={{ fontSize: 20, fontWeight: 800, lineHeight: 1 }}>{day}</div>
+                          <div style={{ fontSize: 10, fontWeight: 700, marginTop: 2 }}>{month}</div>
+                          <div style={{ fontSize: 9, marginTop: 1, opacity: 0.85 }}>{year}</div>
+                        </div>
+                        {/* Card */}
+                        <div style={{ flex: 1, border: '1px solid #E5E7EB', borderRadius: 8, background: '#fff', overflow: 'hidden' }}>
+                          {/* By line */}
+                          <div style={{ padding: '7px 14px', borderBottom: '1px solid #F3F4F6', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ fontSize: 12, color: '#374151' }}>Por: <strong>guilherme teixeira</strong></span>
+                            <span style={{ fontSize: 11, color: '#9CA3AF' }}>⏱ {time}</span>
+                          </div>
+                          {/* Section title */}
+                          <div style={{ padding: '8px 14px', borderBottom: '1px solid #F3F4F6', fontSize: 13, fontWeight: 600, color: '#111827', background: '#F9FAFB' }}>
+                            Prescrição
+                          </div>
+                          {/* Tab + imprimir */}
+                          <div style={{ padding: '8px 14px', borderBottom: '1px solid #F3F4F6', display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{
+                              fontSize: 12, fontWeight: 500, color: '#1E40AF', background: '#EFF6FF',
+                              border: '1px solid #BFDBFE', borderRadius: 5, padding: '2px 10px',
+                            }}>Prescrição #1</span>
+                            <button style={{
+                              height: 24, padding: '0 10px', border: '1px solid #E5E7EB', borderRadius: 5,
+                              background: '#fff', fontSize: 11, color: '#374151', cursor: 'pointer', fontFamily: 'inherit',
+                              display: 'flex', alignItems: 'center', gap: 4,
+                            }}
+                              onClick={() => window.print()}
+                            >🖨 Imprimir</button>
+                          </div>
+                          {/* Items list */}
+                          <div style={{ padding: '10px 14px' }}>
+                            {group.items.map((rx, ri) => (
+                              <div key={rx.id} style={{ fontSize: 13, color: '#374151', marginBottom: ri < group.items.length - 1 ? 5 : 0 }}>
+                                <span style={{ color: '#6B7280' }}>–</span>{' '}
+                                <strong>{rx.medication}</strong>
+                                {rx.dosage    && <span style={{ color: '#6B7280' }}> {rx.dosage}</span>}
+                                {rx.frequency && <span style={{ color: '#9CA3AF' }}> · {rx.frequency}</span>}
+                                {rx.duration  && <span style={{ color: '#9CA3AF' }}> · {rx.duration}</span>}
+                              </div>
+                            ))}
+                          </div>
+                          {/* Footer */}
+                          <div style={{ padding: '8px 14px', borderTop: '1px solid #F3F4F6', display: 'flex', justifyContent: 'flex-end' }}>
+                            <button onClick={() => setShowCreatePresc(true)} style={{
+                              fontSize: 12, color: '#0066D0', background: 'none', border: 'none',
+                              cursor: 'pointer', fontFamily: 'inherit', textDecoration: 'underline',
+                            }}>Inserir informações</button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                </div>
+              );
+            })()}
 
             {activeSection === 'acomp' && (
               <Card>
@@ -1743,6 +1943,11 @@ function Prontuario({ initialPatientId }: { initialPatientId?: string }) {
         <EditConsultaModal patient={selected} record={editRecord} onClose={() => setEditRecord(null)} onSaved={() => {
           setEditRecord(null);
           supabase.from('medical_records').select('*').eq('patient_id', selected.id).order('created_at', { ascending: false }).then(({ data }) => setRecords((data as MedicalRecord[]) ?? []));
+          supabase.from('prescriptions').select('*').eq('patient_id', selected.id).order('created_at', { ascending: false }).then(({ data }) => setPrescriptions((data as Prescription[]) ?? []));
+        }} />
+      )}
+      {showCreatePresc && selected && (
+        <NovaPrescricaoModal patient={selected} onClose={() => setShowCreatePresc(false)} onSaved={() => {
           supabase.from('prescriptions').select('*').eq('patient_id', selected.id).order('created_at', { ascending: false }).then(({ data }) => setPrescriptions((data as Prescription[]) ?? []));
         }} />
       )}
@@ -3553,6 +3758,97 @@ function ConsultaModal({ patient, onClose, onSaved }: { patient: Patient; onClos
             <button onClick={onClose} style={{ height: 36, padding: '0 20px', background: '#fff', border: '1px solid #D1D5DB', borderRadius: 6, fontSize: 13, color: '#374151', cursor: 'pointer', fontFamily: 'inherit' }}>Cancelar</button>
             <button onClick={handleSave} disabled={saving} style={{ height: 36, padding: '0 24px', background: '#0066D0', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
               {saving ? 'Salvando...' : 'Finalizar Consulta'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────
+   NOVA PRESCRIÇÃO MODAL
+─────────────────────────────────────────── */
+function NovaPrescricaoModal({ patient, onClose, onSaved }: {
+  patient: Patient; onClose: () => void; onSaved?: () => void;
+}) {
+  const [items,  setItems]  = useState([{ med: '', dose: '', freq: '', dur: '' }]);
+  const [saving, setSaving] = useState(false);
+  const [error,  setError]  = useState('');
+
+  const addItem    = () => setItems(p => [...p, { med: '', dose: '', freq: '', dur: '' }]);
+  const removeItem = (i: number) => setItems(p => p.filter((_, idx) => idx !== i));
+  const update     = (i: number, f: string, v: string) =>
+    setItems(p => p.map((it, idx) => idx === i ? { ...it, [f]: v } : it));
+
+  const handleSave = async () => {
+    const valid = items.filter(it => it.med.trim());
+    if (!valid.length) { setError('Adicione ao menos um medicamento.'); return; }
+    setSaving(true); setError('');
+    const { data: doc } = await supabase.from('doctors').select('id').limit(1);
+    const doctorId = doc?.[0]?.id;
+    for (const p of valid) {
+      await supabase.from('prescriptions').insert({
+        patient_id: patient.id, doctor_id: doctorId || null,
+        medication: p.med, dosage: p.dose || null, frequency: p.freq || null, duration: p.dur || null,
+      });
+    }
+    setSaving(false); onSaved?.(); onClose();
+  };
+
+  const inp: CSSProperties = { width: '100%', border: '1px solid #D1D5DB', borderRadius: 6, padding: '0 8px', height: 32, fontSize: 12, color: '#111827', fontFamily: 'inherit', outline: 'none', background: '#fff', boxSizing: 'border-box' };
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 200, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: 60 }}>
+      <div style={{ background: '#fff', borderRadius: 10, width: 620, boxShadow: '0 20px 60px rgba(0,0,0,0.25)' }}>
+        {/* Header */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 20px', borderBottom: '1px solid #E5E7EB', background: '#EFF6FF', borderRadius: '10px 10px 0 0' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ width: 30, height: 30, background: '#1E40AF', borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <span style={{ color: '#fff', fontSize: 13, fontWeight: 800, fontStyle: 'italic' }}>Rx</span>
+            </div>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: '#1E40AF' }}>Nova Prescrição</div>
+              <div style={{ fontSize: 11, color: '#6B7280' }}>{patient.name}</div>
+            </div>
+          </div>
+          <button onClick={onClose} style={{ width: 28, height: 28, background: 'none', border: 'none', cursor: 'pointer', fontSize: 20, color: '#9CA3AF', borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>×</button>
+        </div>
+
+        {/* Items */}
+        <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 10, maxHeight: '60vh', overflowY: 'auto' }}>
+          {/* Column headers */}
+          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr auto', gap: 8 }}>
+            {['Medicamento *', 'Dose', 'Frequência', 'Duração', ''].map((h, i) => (
+              <div key={i} style={{ fontSize: 11, color: '#6B7280', fontWeight: 500 }}>{h}</div>
+            ))}
+          </div>
+          {items.map((it, i) => (
+            <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr auto', gap: 8, alignItems: 'center' }}>
+              <input value={it.med}  onChange={e => update(i, 'med',  e.target.value)} placeholder="Ex: Amoxicilina" style={inp} autoFocus={i === 0} />
+              <input value={it.dose} onChange={e => update(i, 'dose', e.target.value)} placeholder="500mg"           style={inp} />
+              <input value={it.freq} onChange={e => update(i, 'freq', e.target.value)} placeholder="8/8h"            style={inp} />
+              <input value={it.dur}  onChange={e => update(i, 'dur',  e.target.value)} placeholder="7 dias"          style={inp} />
+              <button onClick={() => removeItem(i)} disabled={items.length === 1} style={{
+                width: 28, height: 28, background: 'none', border: '1px solid #E5E7EB', borderRadius: 4,
+                cursor: items.length > 1 ? 'pointer' : 'default', color: '#EF4444', fontSize: 16,
+                opacity: items.length === 1 ? 0.3 : 1,
+              }}>×</button>
+            </div>
+          ))}
+          <button onClick={addItem} style={{
+            alignSelf: 'flex-start', height: 30, padding: '0 12px', border: '1px dashed #0066D0',
+            borderRadius: 6, background: 'none', color: '#0066D0', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit',
+          }}>+ Adicionar item</button>
+        </div>
+
+        {/* Footer */}
+        <div style={{ borderTop: '1px solid #E5E7EB', padding: '12px 20px' }}>
+          {error && <div style={{ fontSize: 12, color: '#EF4444', marginBottom: 8 }}>{error}</div>}
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <button onClick={onClose} style={{ height: 36, padding: '0 20px', background: '#fff', border: '1px solid #D1D5DB', borderRadius: 6, fontSize: 13, color: '#374151', cursor: 'pointer', fontFamily: 'inherit' }}>Cancelar</button>
+            <button onClick={handleSave} disabled={saving} style={{ height: 36, padding: '0 24px', background: '#1E40AF', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+              {saving ? 'Salvando...' : 'Salvar Prescrição'}
             </button>
           </div>
         </div>
