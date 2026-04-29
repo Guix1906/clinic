@@ -1526,6 +1526,8 @@ function Prontuario({ initialPatientId }: { initialPatientId?: string }) {
   const [search,          setSearch]          = useState('');
   const [lastConsults,    setLastConsults]    = useState<Record<string,string>>({});
   const [checkedIds,      setCheckedIds]      = useState<string[]>([]);
+  const [genderFilter,    setGenderFilter]    = useState('');
+  const [showFilterMenu,  setShowFilterMenu]  = useState(false);
 
   useEffect(() => {
     if (!timerActive) return;
@@ -1607,14 +1609,22 @@ function Prontuario({ initialPatientId }: { initialPatientId?: string }) {
   });
 
   const searchedPatients = patients.filter(p => {
-    if (!search.trim()) return true;
-    const q = search.toLowerCase();
-    return (
-      p.name.toLowerCase().includes(q) ||
-      (p.phone ?? '').includes(q) ||
-      ((p as any).cpf ?? '').includes(q) ||
-      patientCode(p.id).includes(q)
-    );
+    // Text search
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      const matchText = p.name.toLowerCase().includes(q) ||
+        (p.phone ?? '').includes(q) ||
+        ((p as any).cpf ?? '').includes(q) ||
+        patientCode(p.id).includes(q);
+      if (!matchText) return false;
+    }
+    // Gender / status filter
+    if (genderFilter === 'masculino') return p.gender === 'M' || p.gender === 'masculino';
+    if (genderFilter === 'feminino')  return p.gender === 'F' || p.gender === 'feminino';
+    if (genderFilter === 'obito')     return (p as any).status === 'obito';
+    if (genderFilter === 'ativo')     return (p as any).active !== false;
+    if (genderFilter === 'inativo')   return (p as any).active === false;
+    return true;
   });
 
   // ══════════════════════════════════════════
@@ -1659,12 +1669,55 @@ function Prontuario({ initialPatientId }: { initialPatientId?: string }) {
                   ✓ <span style={{ color: '#6B7280' }}>▾</span>
                 </button>
               </div>
-              <button
-                onClick={() => {/* future: new patient */}}
-                style={{ height: 34, padding: '0 16px', background: '#0066D0', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', letterSpacing: 0.3 }}
-              >
-                NOVO PACIENTE
-              </button>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <button
+                  onClick={() => {/* future: new patient */}}
+                  style={{ height: 34, padding: '0 16px', background: '#0066D0', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', letterSpacing: 0.3 }}
+                >
+                  NOVO PACIENTE
+                </button>
+
+                {/* Filter dropdown button */}
+                <div style={{ position: 'relative' }}>
+                  <button
+                    onClick={() => setShowFilterMenu(p => !p)}
+                    style={{ height: 34, padding: '0 10px', border: '1px solid #E5E7EB', borderRadius: 6, background: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, fontSize: 13, color: '#374151', fontFamily: 'inherit' }}
+                  >
+                    ⚙ <span style={{ fontSize: 11 }}>▾</span>
+                  </button>
+                  {showFilterMenu && (
+                    <>
+                      {/* Backdrop */}
+                      <div style={{ position: 'fixed', inset: 0, zIndex: 99 }} onClick={() => setShowFilterMenu(false)} />
+                      {/* Menu */}
+                      <div style={{ position: 'absolute', right: 0, top: 38, background: '#fff', border: '1px solid #E5E7EB', borderRadius: 7, boxShadow: '0 8px 24px rgba(0,0,0,.12)', zIndex: 100, minWidth: 180, overflow: 'hidden' }}>
+                        {[
+                          { key: '',          label: 'Remover filtros',  color: '#374151' },
+                          { key: 'masculino', label: 'Sexo masculino',   color: '#374151' },
+                          { key: 'feminino',  label: 'Sexo feminino',    color: '#374151' },
+                          { key: 'obito',     label: 'Óbitos',           color: '#EF4444' },
+                          { key: 'ativo',     label: 'Ativos',           color: '#374151' },
+                          { key: 'inativo',   label: 'Inativos',         color: '#F59E0B' },
+                        ].map(opt => (
+                          <div
+                            key={opt.key}
+                            onClick={() => { setGenderFilter(opt.key); setShowFilterMenu(false); }}
+                            style={{
+                              padding: '9px 16px', fontSize: 13, color: opt.color, cursor: 'pointer',
+                              background: genderFilter === opt.key ? '#F3F4F6' : '#fff',
+                              fontWeight: genderFilter === opt.key ? 600 : 400,
+                            }}
+                            onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = '#F9FAFB'}
+                            onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = genderFilter === opt.key ? '#F3F4F6' : '#fff'}
+                          >
+                            {opt.label}
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
             </div>
 
             {/* Table */}
