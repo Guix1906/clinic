@@ -1517,7 +1517,7 @@ function Prontuario({ initialPatientId }: { initialPatientId?: string }) {
   const [showPrescDate,   setShowPrescDate]   = useState(true);
   const [prescModels,     setPrescModels]     = useState<{id:string;name:string;items:{med:string;dose:string;freq:string;dur:string}[]}[]>([]);
   const [showCreatePresc, setShowCreatePresc] = useState(false);
-  const [showBanner,      setShowBanner]      = useState(true);
+  const [showBanner,      setShowBanner]      = useState(false);
   const [timerSecs,       setTimerSecs]       = useState(0);
   const [timerActive,     setTimerActive]     = useState(false);
   const [showDiags,       setShowDiags]       = useState(true);
