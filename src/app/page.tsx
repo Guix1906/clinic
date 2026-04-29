@@ -2106,15 +2106,19 @@ function Prontuario({ initialPatientId }: { initialPatientId?: string }) {
               return (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
 
-                  {/* ── iClinic Rx widget ── */}
+                  {/* ── MedFlow Rx widget ── */}
                   <Card>
                     {/* Header */}
                     <div style={{ padding: '10px 14px', borderBottom: '1px solid #F3F4F6', display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <div style={{ width: 32, height: 32, background: '#1E40AF', borderRadius: 7, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                        <span style={{ color: '#fff', fontSize: 12, fontWeight: 800, fontStyle: 'italic' }}>Rx</span>
+                      {/* MedFlow Rx logo */}
+                      <div style={{ width: 36, height: 36, borderRadius: 8, background: 'linear-gradient(135deg,#0066D0 0%,#00B4D8 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: '0 2px 6px rgba(0,102,208,.35)' }}>
+                        <span style={{ color: '#fff', fontSize: 13, fontWeight: 900, fontStyle: 'italic', letterSpacing: -0.5 }}>Rx</span>
                       </div>
                       <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 13, fontWeight: 700, color: '#111827' }}>iClinic Rx</div>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: '#111827', display: 'flex', alignItems: 'center', gap: 5 }}>
+                          <span style={{ color: '#0066D0' }}>MedFlow</span>
+                          <span style={{ color: '#00B4D8', fontStyle: 'italic' }}>Rx</span>
+                        </div>
                         <div style={{ fontSize: 11, color: '#9CA3AF' }}>Consulta: {selected?.name}</div>
                       </div>
                       {/* Toggle mostrar data */}
