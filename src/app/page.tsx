@@ -1,7 +1,12 @@
 'use client';
 import React, { useState, useEffect, CSSProperties } from 'react';
 import { supabase } from '@/lib/supabase';
-import WeeklyCalendar from '@/components/calendar/WeeklyCalendar';
+import {
+  DndContext, DragOverlay, useDroppable, useDraggable,
+  MouseSensor, TouchSensor, useSensors, useSensor,
+  type DragStartEvent, type DragEndEvent,
+} from '@dnd-kit/core';
+import { CSS as DndCSS } from '@dnd-kit/utilities';
 
 /* ─────────────────────────────────────────
    ICON COMPONENT
@@ -375,6 +380,22 @@ function weekRange() {
     end:   end.toISOString().split('T')[0],
   };
 }
+
+/* ── Time helpers ── */
+function timeToMinutes(t: string): number {
+  const [h, m] = (t ?? '00:00').split(':').map(Number);
+  return (h || 0) * 60 + (m || 0);
+}
+function minutesToTime(mins: number): string {
+  const clamped = Math.max(0, Math.min(mins, 23 * 60 + 59));
+  return `${String(Math.floor(clamped / 60)).padStart(2, '0')}:${String(clamped % 60).padStart(2, '0')}`;
+}
+
+/* ── Agenda time slots 07:00 → 21:00 in 30-min steps ── */
+const AGENDA_TIMES: string[] = Array.from({ length: 29 }, (_, i) => {
+  const mins = 7 * 60 + i * 30;
+  return `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`;
+});
 
 const STATUS_COLORS: Record<string, { bg: string; color: string }> = {
   em_atendimento: { bg: '#DBEAFE', color: '#0066D0' },
@@ -896,35 +917,250 @@ function Dashboard({ onNavigateProntuario }: { onNavigateProntuario?: (patientId
 }
 
 /* ─────────────────────────────────────────
+   AGENDA — DND HELPERS
+───────────────────────────────────────── */
+function DroppableSlot({ id, isWeekend, children }: {
+  id: string; isWeekend: boolean; children?: React.ReactNode;
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id });
+  return (
+    <div ref={setNodeRef} style={{
+      borderRight: '1px solid #E5E7EB',
+      borderBottom: '1px solid #F3F4F6',
+      minHeight: 28,
+      background: isOver ? '#DBEAFE' : isWeekend ? '#FAFAFA' : '#fff',
+      padding: 2,
+      transition: 'background .1s',
+    }}>
+      {children}
+    </div>
+  );
+}
+
+function DraggableAppt({ appt }: { appt: Appointment }) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+    id: appt.id,
+    data: { appt },
+  });
+  const color = STATUS_COLORS[appt.status]?.color ?? '#00BCD4';
+  const bg    = STATUS_COLORS[appt.status]?.bg    ?? '#B2EBF2';
+  return (
+    <div
+      ref={setNodeRef}
+      {...listeners}
+      {...attributes}
+      style={{
+        background: bg,
+        borderLeft: `3px solid ${color}`,
+        borderRadius: 3,
+        padding: '3px 6px',
+        fontSize: 10,
+        color,
+        lineHeight: 1.3,
+        cursor: isDragging ? 'grabbing' : 'grab',
+        opacity: isDragging ? 0.35 : 1,
+        transform: DndCSS.Translate.toString(transform),
+        position: 'relative',
+        zIndex: isDragging ? 999 : 1,
+        userSelect: 'none',
+        marginBottom: 1,
+      }}
+    >
+      <div style={{ fontWeight: 700 }}>{appt.start_time?.slice(0, 5)}–{appt.end_time?.slice(0, 5)}</div>
+      <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        {appt.patients?.name ?? 'Paciente'}
+      </div>
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────
    AGENDA SCREEN
 ───────────────────────────────────────── */
 function Agenda() {
+  const [view,         setView]         = useState<'DIA' | 'SEMANA'>('SEMANA');
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [loading,      setLoading]      = useState(true);
   const [showAddAppt,  setShowAddAppt]  = useState(false);
   const [showWaitlist, setShowWaitlist] = useState(false);
+  const [activeAppt,   setActiveAppt]   = useState<Appointment | null>(null);
+
+  const { start, end } = weekRange();
+  const today = todayISO();
+
+  const allDays = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(start + 'T12:00:00');
+    d.setDate(d.getDate() + i);
+    const names = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+    return {
+      name:    names[d.getDay()],
+      date:    d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' }),
+      iso:     d.toISOString().split('T')[0],
+      isToday: d.toISOString().split('T')[0] === today,
+      weekend: d.getDay() === 0 || d.getDay() === 6,
+    };
+  });
+  const agendaDays = view === 'SEMANA' ? allDays : allDays.filter(d => d.iso === today) ?? [allDays[1]];
+
+  const loadAppointments = () => {
+    setLoading(true);
+    supabase.from('appointments')
+      .select('*, patients(id,name)')
+      .gte('date', start).lte('date', end).order('start_time')
+      .then(({ data }) => { setAppointments((data as Appointment[]) ?? []); setLoading(false); });
+  };
+  useEffect(() => { loadAppointments(); }, []);
+
+  /* ── DnD sensors ── */
+  const sensors = useSensors(
+    useSensor(MouseSensor,  { activationConstraint: { distance: 4 } }),
+    useSensor(TouchSensor,  { activationConstraint: { delay: 200, tolerance: 6 } }),
+  );
+
+  const handleDragStart = (e: DragStartEvent) => {
+    setActiveAppt(appointments.find(a => a.id === e.active.id) ?? null);
+  };
+
+  const handleDragEnd = (e: DragEndEvent) => {
+    setActiveAppt(null);
+    const { active, over } = e;
+    if (!over) return;
+
+    // over.id = "YYYY-MM-DD__HH:MM"  — exact cell the user dropped onto
+    const parts = String(over.id).split('__');
+    if (parts.length !== 2) return;
+    const [newDate, newStart] = parts;
+    const appt = active.data.current?.appt as Appointment;
+    if (!appt) return;
+
+    // No movement
+    if (appt.date === newDate && appt.start_time?.slice(0, 5) === newStart) return;
+
+    // Preserve original duration
+    const durMins = Math.max(30,
+      timeToMinutes(appt.end_time?.slice(0, 5) ?? '09:00') -
+      timeToMinutes(appt.start_time?.slice(0, 5) ?? '08:00')
+    );
+    const newEnd = minutesToTime(timeToMinutes(newStart) + durMins);
+
+    // Optimistic UI update
+    setAppointments(prev => prev.map(a =>
+      a.id === appt.id ? { ...a, date: newDate, start_time: newStart, end_time: newEnd } : a
+    ));
+
+    // Persist to Supabase
+    supabase.from('appointments')
+      .update({ date: newDate, start_time: newStart, end_time: newEnd })
+      .eq('id', appt.id)
+      .then(({ error }) => { if (error) loadAppointments(); }); // revert on error
+  };
+
+  const cols = `52px repeat(${agendaDays.length}, 1fr)`;
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      {/* Extra action bar (Lista de Espera / Imprimir) */}
-      <div style={{ padding: '8px 16px', background: '#fff', borderBottom: '1px solid #E5E7EB', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
-        <div style={{ fontSize: 14, fontWeight: 600, color: '#0066D0' }}>guilherme teixeira</div>
+
+      {/* ── Toolbar ── */}
+      <div style={{ padding: '12px 20px', background: '#fff', borderBottom: '1px solid #E5E7EB', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
+        <div style={{ fontSize: 16, fontWeight: 600, color: '#0066D0' }}>guilherme teixeira</div>
         <div style={{ display: 'flex', gap: 6 }}>
           {[
-            { icon: 'list',    label: 'Lista de Espera', action: () => setShowWaitlist(true) },
-            { icon: 'printer', label: 'Imprimir',        action: () => window.print() },
+            { icon: 'plus',    label: 'Novo\nAgendamento', action: () => setShowAddAppt(true) },
+            { icon: 'list',    label: 'Lista de\nEspera',  action: () => setShowWaitlist(true) },
+            { icon: 'printer', label: 'Imprimir\nAgenda',  action: () => window.print() },
           ].map((a, i) => (
-            <button key={i} onClick={a.action} style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '4px 10px', background: 'none', border: '1px solid #E5E7EB', borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit', fontSize: 12, color: '#374151' }}>
-              <Icon name={a.icon} size={12} color="#6B7280" /> {a.label}
+            <button key={i} onClick={a.action} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, padding: '5px 10px', background: 'none', border: '1px solid #E5E7EB', borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit' }}>
+              <Icon name={a.icon} size={13} color="#6B7280" />
+              <span style={{ fontSize: 10, color: '#6B7280', whiteSpace: 'pre-line', textAlign: 'center', lineHeight: 1.2 }}>{a.label}</span>
             </button>
           ))}
         </div>
       </div>
 
-      {/* Google-Calendar-style weekly grid */}
-      <div style={{ flex: 1, overflow: 'hidden' }}>
-        <WeeklyCalendar />
+      {/* ── Week range + view toggle ── */}
+      <div style={{ padding: '8px 16px', background: '#fff', borderBottom: '1px solid #E5E7EB', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
+        <span style={{ fontSize: 13, color: '#374151' }}>{allDays[0].date} – {allDays[6].date}</span>
+        <div style={{ display: 'flex' }}>
+          {(['DIA', 'SEMANA'] as const).map(v => (
+            <button key={v} onClick={() => setView(v)} style={{
+              height: 28, padding: '0 12px', border: '1px solid #E5E7EB', fontSize: 12, fontFamily: 'inherit',
+              background: view === v ? '#EFF6FF' : '#fff',
+              color:      view === v ? '#0066D0' : '#6B7280',
+              fontWeight: view === v ? 600 : 400,
+              cursor: 'pointer',
+            }}>{v}</button>
+          ))}
+        </div>
       </div>
 
-      {showAddAppt  && <AddAppointmentModal onClose={() => setShowAddAppt(false)} onSaved={() => {}} />}
+      {/* ── Grid ── */}
+      {loading ? <Spinner /> : (
+        <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+          <div style={{ flex: 1, overflowY: 'auto', overflowX: 'auto' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: cols, minWidth: 600 }}>
+
+              {/* Header row */}
+              <div style={{ borderRight: '1px solid #E5E7EB', borderBottom: '1px solid #E5E7EB', background: '#FAFAFA' }} />
+              {agendaDays.map((d, i) => (
+                <div key={i} style={{
+                  borderRight: '1px solid #E5E7EB', borderBottom: '1px solid #E5E7EB',
+                  padding: '8px 6px', textAlign: 'center',
+                  background: d.isToday ? '#EFF6FF' : d.weekend ? '#FAFAFA' : '#fff',
+                }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: d.isToday ? '#0066D0' : '#374151' }}>{d.name}</div>
+                  <div style={{ fontSize: 10, color: '#9CA3AF' }}>{d.date}</div>
+                </div>
+              ))}
+
+              {/* Time slots */}
+              {AGENDA_TIMES.map((t, ti) => (
+                <React.Fragment key={ti}>
+                  {/* Time label */}
+                  <div style={{
+                    borderRight: '1px solid #E5E7EB', borderBottom: '1px solid #F3F4F6',
+                    padding: '2px 6px 2px 0', fontSize: 10, color: '#9CA3AF', textAlign: 'right',
+                    background: '#FAFAFA', userSelect: 'none',
+                  }}>
+                    {t}
+                  </div>
+
+                  {/* Droppable cell per day */}
+                  {agendaDays.map((d, di) => {
+                    const slotAppts = appointments.filter(
+                      a => a.date === d.iso && a.start_time?.slice(0, 5) === t
+                    );
+                    return (
+                      <DroppableSlot key={di} id={`${d.iso}__${t}`} isWeekend={d.weekend}>
+                        {slotAppts.map(a => <DraggableAppt key={a.id} appt={a} />)}
+                      </DroppableSlot>
+                    );
+                  })}
+                </React.Fragment>
+              ))}
+
+            </div>
+          </div>
+
+          {/* Ghost shown while dragging */}
+          <DragOverlay dropAnimation={null}>
+            {activeAppt && (
+              <div style={{
+                background: STATUS_COLORS[activeAppt.status]?.bg ?? '#B2EBF2',
+                borderLeft: `3px solid ${STATUS_COLORS[activeAppt.status]?.color ?? '#00BCD4'}`,
+                borderRadius: 3, padding: '4px 8px', fontSize: 10,
+                color: STATUS_COLORS[activeAppt.status]?.color ?? '#006064',
+                boxShadow: '0 6px 20px rgba(0,0,0,.18)',
+                minWidth: 110, opacity: 0.92, pointerEvents: 'none',
+              }}>
+                <div style={{ fontWeight: 700 }}>{activeAppt.start_time?.slice(0, 5)}–{activeAppt.end_time?.slice(0, 5)}</div>
+                <div>{activeAppt.patients?.name ?? 'Paciente'}</div>
+              </div>
+            )}
+          </DragOverlay>
+        </DndContext>
+      )}
+
+      {showAddAppt  && <AddAppointmentModal onClose={() => setShowAddAppt(false)} onSaved={loadAppointments} />}
       {showWaitlist && <WaitlistModal onClose={() => setShowWaitlist(false)} />}
     </div>
   );
