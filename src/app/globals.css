@@ -1,4 +1,29 @@
 @import "tailwindcss";
+@import "../styles.css";
 
 *, *::before, *::after { box-sizing: border-box; }
 body { margin: 0; padding: 0; }
+
+/* ── Appointment block hover effects ── */
+.appt-block { transition: box-shadow .15s, background .12s; }
+.appt-block:hover { box-shadow: 0 3px 12px rgba(0,0,0,.18) !important; z-index: 20 !important; }
+.appt-block .appt-type { transition: opacity .12s; }
+.appt-block:hover .appt-type { opacity: 0 !important; }
+.appt-block .appt-status { opacity: 0; transform: translateY(2px); transition: opacity .15s, transform .15s; }
+.appt-block:hover .appt-status { opacity: 1 !important; transform: translateY(0) !important; }
+.appt-block .appt-dot { transition: box-shadow .15s; }
+.appt-block:hover .appt-dot { box-shadow: 0 0 0 3px var(--status-color-faded) !important; }
+
+@media print {
+  /* Ocultar elementos de navegação */
+  nav, aside, .sidebar, [data-sidebar], header, .topbar,
+  button, .no-print {
+    display: none !important;
+  }
+  /* Formatar conteúdo para impressão */
+  body { background: white !important; }
+  .print-content {
+    width: 100% !important;
+    max-width: none !important;
+  }
+}

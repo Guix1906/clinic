@@ -1,0 +1,322 @@
+/* ─── Design Tokens ──────────────────────────────────────────────── */
+@theme {
+  --color-background:         #f8f9fb;
+  --color-foreground:         #0f172a;
+  --color-card:               #ffffff;
+  --color-muted:              #f1f5f9;
+  --color-muted-foreground:   #64748b;
+  --color-border:             #e2e8f0;
+  --color-primary:            #2563eb;
+  --color-primary-foreground: #ffffff;
+  --color-destructive:        #ef4444;
+  --color-accent:             #f0f4ff;
+  --color-accent-foreground:  #1d4ed8;
+  --color-info:               #0ea5e9;
+}
+
+/* ─── EHR Component Classes ─────────────────────────────────────── */
+@layer components {
+
+  /* Shell — 3-column grid container */
+  .ehr-shell {
+    background-color: var(--color-muted);
+    min-height: 100svh;
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+  @media (min-width: 80rem) {
+    .ehr-shell {
+      grid-template-columns: 205px minmax(0, 1fr) 355px;
+    }
+  }
+
+  /* Panel card */
+  .ehr-panel {
+    background-color: var(--color-card);
+    border: 1px solid var(--color-border);
+    border-radius: 0.75rem;
+    box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.05);
+  }
+
+  /* Status badge pill */
+  .ehr-status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    border-radius: 9999px;
+    padding: 0.125rem 0.625rem;
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    line-height: 1.5;
+  }
+
+  /* Small chip / tag button */
+  .ehr-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    border-radius: 9999px;
+    border: 1px solid var(--color-border);
+    background-color: var(--color-card);
+    padding: 0.2rem 0.625rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--color-foreground);
+    cursor: pointer;
+    transition: background-color 120ms ease, border-color 120ms ease;
+    white-space: nowrap;
+  }
+  .ehr-chip:hover {
+    background-color: var(--color-muted);
+    border-color: #cbd5e1;
+  }
+
+  /* Reference panel tab */
+  .ehr-ref-tab {
+    display: block;
+    width: 100%;
+    padding: 0.375rem 0.75rem;
+    border-radius: 0.5rem;
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: var(--color-muted-foreground);
+    text-align: left;
+    cursor: pointer;
+    background: transparent;
+    border: none;
+    transition: background-color 120ms ease, color 120ms ease;
+  }
+  .ehr-ref-tab:hover {
+    background-color: var(--color-muted);
+    color: var(--color-foreground);
+  }
+  .ehr-ref-tab-active {
+    background-color: var(--color-accent);
+    color: var(--color-accent-foreground);
+    font-weight: 600;
+  }
+  .ehr-ref-tab-active:hover {
+    background-color: var(--color-accent);
+    color: var(--color-accent-foreground);
+  }
+
+  /* Primary action button */
+  .ehr-action-primary {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    border-radius: 0.5rem;
+    background-color: var(--color-primary);
+    padding: 0.45rem 1rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--color-primary-foreground);
+    border: none;
+    cursor: pointer;
+    transition: background-color 120ms ease, box-shadow 120ms ease;
+    white-space: nowrap;
+  }
+  .ehr-action-primary:hover {
+    background-color: #1d4ed8;
+    box-shadow: 0 2px 8px rgb(37 99 235 / 0.35);
+  }
+  .ehr-action-primary:active {
+    background-color: #1e40af;
+  }
+
+  /* Secondary action button */
+  .ehr-action-secondary {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    border-radius: 0.5rem;
+    border: 1px solid var(--color-border);
+    background-color: var(--color-card);
+    padding: 0.45rem 1rem;
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: var(--color-foreground);
+    cursor: pointer;
+    transition: background-color 120ms ease, border-color 120ms ease;
+    white-space: nowrap;
+  }
+  .ehr-action-secondary:hover {
+    background-color: var(--color-muted);
+    border-color: #cbd5e1;
+  }
+
+  /* Text input */
+  .ehr-input {
+    border-radius: 0.5rem;
+    border: 1px solid var(--color-border);
+    background-color: var(--color-card);
+    padding: 0 0.75rem;
+    font-size: 0.85rem;
+    color: var(--color-foreground);
+    outline: none;
+    width: 100%;
+    transition: border-color 120ms ease, box-shadow 120ms ease;
+  }
+  .ehr-input:focus {
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 3px rgb(37 99 235 / 0.12);
+  }
+  .ehr-input::placeholder {
+    color: var(--color-muted-foreground);
+  }
+
+  /* Editor wrapper (relative container for floating toolbar) */
+  .ehr-editor-wrap {
+    position: relative;
+    border-radius: 0.5rem;
+    border: 1px solid var(--color-border);
+    background-color: var(--color-card);
+    overflow: hidden;
+    transition: border-color 120ms ease, box-shadow 120ms ease;
+  }
+  .ehr-editor-wrap:focus-within {
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 3px rgb(37 99 235 / 0.1);
+  }
+
+  /* Floating format toolbar */
+  .ehr-editor-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    border-radius: 9999px;
+    border: 1px solid var(--color-border);
+    background-color: var(--color-card);
+    padding: 0.3rem 0.75rem;
+    box-shadow: 0 2px 10px rgb(0 0 0 / 0.08);
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(-4px);
+    transition: opacity 160ms ease, transform 160ms ease;
+  }
+  .ehr-editor-wrap:focus-within .ehr-editor-toolbar {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+  }
+
+  /* contentEditable note area */
+  .ehr-note-editor {
+    display: block;
+    width: 100%;
+    padding: 1rem;
+    font-size: 0.875rem;
+    line-height: 1.7;
+    color: var(--color-foreground);
+    outline: none;
+    resize: none;
+    background: transparent;
+    border: none;
+    font-family: inherit;
+  }
+  .ehr-note-editor:empty::before {
+    content: attr(data-placeholder);
+    color: var(--color-muted-foreground);
+    pointer-events: none;
+  }
+  .ehr-note-editor h1,
+  .ehr-note-editor h2,
+  .ehr-note-editor h3 {
+    font-weight: 700;
+    margin: 0.75em 0 0.25em;
+    line-height: 1.3;
+  }
+  .ehr-note-editor h1 { font-size: 1.125rem; }
+  .ehr-note-editor h2 { font-size: 1rem; }
+  .ehr-note-editor h3 { font-size: 0.9rem; color: var(--color-muted-foreground); }
+  .ehr-note-editor strong { font-weight: 700; }
+  .ehr-note-editor em { font-style: italic; }
+  .ehr-note-editor ul,
+  .ehr-note-editor ol {
+    padding-left: 1.5rem;
+    margin: 0.25rem 0;
+  }
+  .ehr-note-editor li { margin-bottom: 0.125rem; }
+  .ehr-note-editor p { margin: 0.25rem 0; }
+
+  /* Textarea fallback (mirrors ehr-note-editor sizing/padding) */
+  .ehr-editor-textarea {
+    display: block;
+    width: 100%;
+    padding: 1rem;
+    font-size: 0.875rem;
+    line-height: 1.7;
+    color: var(--color-foreground);
+    background: transparent;
+    border: none;
+    outline: none;
+    resize: none;
+    font-family: inherit;
+  }
+
+  /* AI assist floating button */
+  .ehr-ai-button {
+    position: absolute;
+    bottom: 0.75rem;
+    right: 0.75rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    border-radius: 9999px;
+    background: linear-gradient(135deg, #7c3aed 0%, #2563eb 100%);
+    padding: 0.35rem 0.85rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #fff;
+    border: none;
+    cursor: pointer;
+    box-shadow: 0 2px 10px rgb(124 58 237 / 0.35);
+    transition: box-shadow 120ms ease, transform 120ms ease;
+  }
+  .ehr-ai-button:hover {
+    box-shadow: 0 4px 16px rgb(124 58 237 / 0.45);
+    transform: translateY(-1px);
+  }
+  .ehr-ai-button:active {
+    transform: translateY(0);
+  }
+
+  /* Bottom action bar (fixed, adjusts with sidebar widths on xl) */
+  .ehr-bottom-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    border-top: 1px solid var(--color-border);
+    background-color: var(--color-card);
+    padding: 0.625rem 1rem;
+    box-shadow: 0 -1px 8px rgb(0 0 0 / 0.06);
+  }
+  @media (min-width: 80rem) {
+    .ehr-bottom-bar {
+      left: 205px;
+      right: 355px;
+    }
+  }
+
+  /* Mini icon wrapper in reference panels */
+  .ehr-mini-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: 0.375rem;
+    background-color: var(--color-accent);
+    color: var(--color-accent-foreground);
+    flex-shrink: 0;
+  }
+
+}

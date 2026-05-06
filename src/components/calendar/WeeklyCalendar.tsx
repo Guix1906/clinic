@@ -13,9 +13,14 @@ function QuickAddModal({
   onClose: () => void;
   onSave: (appt: Omit<CalendarAppointment, 'id'>) => Promise<void>;
 }) {
-  const [patientName, setPatientName] = useState('');
-  const [startTime,   setStartTime]   = useState(time);
-  const [endTime,     setEndTime]     = useState(() => {
+  const [patientSearch, setPatientSearch] = useState('');
+  const [patientId,     setPatientId]     = useState('');
+  const [patientName,   setPatientName]   = useState('');
+  const [suggestions,   setSuggestions]   = useState<{ id: string; name: string }[]>([]);
+  const [allPatients,   setAllPatients]   = useState<{ id: string; name: string }[]>([]);
+  const [showSug,       setShowSug]       = useState(false);
+  const [startTime,     setStartTime]     = useState(time);
+  const [endTime,       setEndTime]       = useState(() => {
     const [h, m] = time.split(':').map(Number);
     const total = h * 60 + m + 30;
     return `${String(Math.floor(total/60)).padStart(2,'0')}:${String(total%60).padStart(2,'0')}`;
@@ -23,11 +28,28 @@ function QuickAddModal({
   const [type,   setType]   = useState('consulta');
   const [saving, setSaving] = useState(false);
 
+  useEffect(() => {
+    supabase.from('patients').select('id,name').eq('active', true).order('name').limit(500)
+      .then(({ data }) => setAllPatients((data ?? []) as { id: string; name: string }[]));
+  }, []);
+
+  useEffect(() => {
+    if (patientSearch.length < 2) { setSuggestions([]); return; }
+    setSuggestions(allPatients.filter(p => p.name.toLowerCase().includes(patientSearch.toLowerCase())).slice(0, 6));
+  }, [patientSearch, allPatients]);
+
+  const selectPatient = (p: { id: string; name: string }) => {
+    setPatientId(p.id);
+    setPatientName(p.name);
+    setPatientSearch(p.name);
+    setShowSug(false);
+  };
+
   const handleSave = async () => {
     if (!patientName.trim()) return;
     setSaving(true);
     await onSave({
-      patient_id: '', patient_name: patientName,
+      patient_id: patientId || '', patient_name: patientName,
       date, start_time: startTime, end_time: endTime,
       type, status: 'agendado',
     });
@@ -57,8 +79,37 @@ function QuickAddModal({
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <input placeholder="Nome do paciente" value={patientName}
-            onChange={e => setPatientName(e.target.value)} style={inp} autoFocus />
+          {/* Patient search with autocomplete */}
+          <div style={{ position: 'relative' }}>
+            <input
+              placeholder="Buscar paciente…"
+              value={patientSearch}
+              autoFocus
+              onChange={e => { setPatientSearch(e.target.value); setPatientId(''); setPatientName(e.target.value); setShowSug(true); }}
+              onFocus={() => setShowSug(true)}
+              onBlur={() => setTimeout(() => setShowSug(false), 150)}
+              style={{ ...inp, borderColor: patientId ? '#10B981' : undefined }}
+            />
+            {showSug && suggestions.length > 0 && (
+              <div style={{
+                position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 10,
+                background: '#fff', border: '1px solid #E5E7EB', borderRadius: 6,
+                boxShadow: '0 4px 16px rgba(0,0,0,.12)', marginTop: 2, overflow: 'hidden',
+              }}>
+                {suggestions.map(p => (
+                  <div key={p.id} onMouseDown={() => selectPatient(p)}
+                    style={{ padding: '8px 12px', fontSize: 13, cursor: 'pointer', color: '#111827' }}
+                    onMouseEnter={e => (e.currentTarget.style.background = '#F3F4F6')}
+                    onMouseLeave={e => (e.currentTarget.style.background = '#fff')}>
+                    {p.name}
+                  </div>
+                ))}
+              </div>
+            )}
+            {!patientId && patientSearch.length >= 2 && suggestions.length === 0 && (
+              <div style={{ fontSize: 11, color: '#EF4444', marginTop: 3 }}>Paciente não encontrado na base</div>
+            )}
+          </div>
 
           <div style={{ display: 'flex', gap: 8 }}>
             <div style={{ flex: 1 }}>
@@ -241,9 +292,15 @@ export default function WeeklyCalendar() {
 
   /* ── Delete ── */
   const handleDelete = useCallback(async (id: string) => {
+    const snapshot = appts.find(a => a.id === id);
     setAppts(prev => prev.filter(a => a.id !== id));
-    await supabase.from('appointments').update({ status: 'cancelado' }).eq('id', id);
-  }, []);
+    const { error } = await supabase.from('appointments').update({ status: 'cancelado' }).eq('id', id);
+    if (error) {
+      // Revert optimistic removal on failure
+      if (snapshot) setAppts(prev => [...prev, snapshot]);
+      alert('Erro ao cancelar agendamento. Tente novamente.');
+    }
+  }, [appts]);
 
   /* ── Navigation ── */
   const goBack = () => {

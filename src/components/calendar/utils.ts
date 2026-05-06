@@ -62,12 +62,15 @@ export const TYPE_META: Record<string, { label: string; color: string; bg: strin
   teleconsulta:     { label: 'Teleconsulta',   color: '#1E40AF', bg: '#BFDBFE' },
 };
 
-export const STATUS_META: Record<string, { label: string; dot: string }> = {
-  agendado:       { label: 'Agendado',        dot: '#94A3B8' },
-  confirmado:     { label: 'Confirmado',      dot: '#3B82F6' },
-  aguardando:     { label: 'Aguardando',      dot: '#F59E0B' },
-  em_atendimento: { label: 'Em atendimento',  dot: '#8B5CF6' },
-  concluido:      { label: 'Concluído',       dot: '#10B981' },
-  faltou:         { label: 'Faltou',          dot: '#EF4444' },
-  cancelado:      { label: 'Cancelado',       dot: '#6B7280' },
+export const STATUS_META: Record<string, {
+  label: string; dot: string; desc: string;
+  bg: string; border: string; textColor: string;
+}> = {
+  agendado:       { label: 'Agendado',        dot: '#94A3B8', desc: 'Consulta agendada, aguardando confirmação', bg: '#F8FAFC', border: '#94A3B8', textColor: '#475569' },
+  confirmado:     { label: 'Confirmado',      dot: '#3B82F6', desc: 'Presença confirmada pelo paciente',         bg: '#EFF6FF', border: '#3B82F6', textColor: '#1D4ED8' },
+  aguardando:     { label: 'Aguardando',      dot: '#F59E0B', desc: 'Paciente na sala de espera',               bg: '#FFFBEB', border: '#D97706', textColor: '#92400E' },
+  em_atendimento: { label: 'Em atendimento',  dot: '#8B5CF6', desc: 'Consulta em andamento agora',              bg: '#F5F3FF', border: '#7C3AED', textColor: '#5B21B6' },
+  concluido:      { label: 'Concluído',       dot: '#10B981', desc: 'Atendimento finalizado com sucesso',       bg: '#ECFDF5', border: '#059669', textColor: '#065F46' },
+  faltou:         { label: 'Faltou',          dot: '#EF4444', desc: 'Paciente não compareceu',                  bg: '#FEF2F2', border: '#DC2626', textColor: '#991B1B' },
+  cancelado:      { label: 'Cancelado',       dot: '#6B7280', desc: 'Consulta cancelada',                       bg: '#F9FAFB', border: '#6B7280', textColor: '#374151' },
 };

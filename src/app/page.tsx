@@ -1,12 +1,25 @@
 'use client';
-import React, { useState, useEffect, CSSProperties } from 'react';
+import React, { useState, useEffect, useRef, useCallback, CSSProperties } from 'react';
+import ReactDOM from 'react-dom';
 import { supabase } from '@/lib/supabase';
+import { useAllowedDoctors, applyDoctorFilter } from '@/lib/useAllowedDoctors';
+import { TYPE_META, STATUS_META } from '@/components/calendar/utils';
+import DOMPurify from 'dompurify';
 import {
   DndContext, DragOverlay, useDroppable, useDraggable,
   MouseSensor, TouchSensor, useSensors, useSensor,
   type DragStartEvent, type DragEndEvent,
 } from '@dnd-kit/core';
 import { CSS as DndCSS } from '@dnd-kit/utilities';
+import {
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer, BarChart, Bar, Cell,
+} from 'recharts';
+import {
+  Users, DollarSign, CheckCircle2, UserX, Bell, Calendar,
+  FileText, AlertTriangle, TrendingUp, TrendingDown, Minus,
+  Activity, ChevronRight, Stethoscope,
+} from 'lucide-react';
 
 /* ─────────────────────────────────────────
    ICON COMPONENT
@@ -99,7 +112,6 @@ function Spinner() {
 type NavId = 'dashboard' | 'agenda' | 'prontuario' | 'pacientes' | 'financas' | 'estoque' | 'relatorios' | 'configuracoes';
 
 const NAV_ITEMS: { id: NavId; label: string; icon: string; badge?: number }[] = [
-  { id: 'dashboard',     label: 'Painel',        icon: 'grid' },
   { id: 'agenda',        label: 'Agenda',         icon: 'calendar' },
   { id: 'prontuario',    label: 'Prontuários',    icon: 'file' },
   { id: 'pacientes',     label: 'Pacientes',      icon: 'users' },
@@ -110,9 +122,19 @@ const NAV_ITEMS: { id: NavId; label: string; icon: string; badge?: number }[] = 
 ];
 
 /* ─────────────────────────────────────────
+   DOCTOR CONTEXT — médico logado
+───────────────────────────────────────── */
+interface DoctorInfo { id: string; name: string; email: string; specialty: string; crm: string; phone?: string; }
+const DoctorContext = React.createContext<DoctorInfo>({
+  id: '', name: 'guilherme teixeira', email: 'gt@medflow.com',
+  specialty: 'Clínica Geral', crm: 'CRM-12345',
+});
+
+/* ─────────────────────────────────────────
    SIDEBAR
 ───────────────────────────────────────── */
 function Sidebar({ active, onNavigate, agendaBadge }: { active: NavId; onNavigate: (id: NavId) => void; agendaBadge: number }) {
+  const doctor = React.useContext(DoctorContext);
   return (
     <aside style={{
       width: 220, background: '#1E2130', display: 'flex', flexDirection: 'column',
@@ -169,10 +191,10 @@ function Sidebar({ active, onNavigate, agendaBadge }: { active: NavId; onNavigat
             width: 32, height: 32, borderRadius: '50%', background: '#0066D0',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             fontSize: 12, fontWeight: 700, color: '#fff', flexShrink: 0,
-          }}>GT</div>
+          }}>{initials(doctor.name)}</div>
           <div>
-            <div style={{ fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>guilherme teixeira</div>
-            <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)' }}>Médico · Admin</div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>{doctor.name}</div>
+            <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)' }}>{doctor.specialty} · Admin</div>
           </div>
         </div>
       </div>
@@ -191,13 +213,18 @@ function Topbar({ screen, notifCount, onNewAppointment, onNewPatient, onNewProfe
   onNewReceptionist: () => void;
 }) {
   const label = NAV_ITEMS.find(n => n.id === screen)?.label ?? 'Painel';
-  const [showMenu, setShowMenu] = useState(false);
+  const [showMenu, setShowMenu]     = useState(false);
+  const [hoveredItem, setHoveredItem] = useState<number | null>(null);
+  const hideTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const openMenu  = () => { if (hideTimeout.current) { clearTimeout(hideTimeout.current); hideTimeout.current = null; } setShowMenu(true); };
+  const closeMenu = () => { hideTimeout.current = setTimeout(() => setShowMenu(false), 120); };
 
   const menuItems = [
-    { label: 'Novo Agendamento',         icon: 'calendar',  action: () => { setShowMenu(false); onNewAppointment(); } },
-    { label: 'Adicionar Paciente',       icon: 'user-plus', action: () => { setShowMenu(false); onNewPatient(); } },
-    { label: 'Adicionar Prof. de Saúde', icon: 'user-plus', action: () => { setShowMenu(false); onNewProfessional(); } },
-    { label: 'Adicionar Recepcionista',  icon: 'user-plus', action: () => { setShowMenu(false); onNewReceptionist(); } },
+    { label: 'Novo Agendamento',         desc: 'Agendar consulta ou procedimento', icon: 'calendar',  color: '#0066D0', bg: '#EFF6FF', action: () => { setShowMenu(false); onNewAppointment(); } },
+    { label: 'Adicionar Paciente',       desc: 'Cadastrar novo paciente',           icon: 'user-plus', color: '#059669', bg: '#F0FDF4', action: () => { setShowMenu(false); onNewPatient(); } },
+    { label: 'Adicionar Profissional',   desc: 'Médico ou especialista',            icon: 'user-plus', color: '#7C3AED', bg: '#F5F3FF', action: () => { setShowMenu(false); onNewProfessional(); } },
+    { label: 'Adicionar Recepcionista',  desc: 'Acesso à recepção',                 icon: 'user-plus', color: '#F59E0B', bg: '#FFFBEB', action: () => { setShowMenu(false); onNewReceptionist(); } },
   ];
 
   return (
@@ -217,47 +244,94 @@ function Topbar({ screen, notifCount, onNewAppointment, onNewPatient, onNewProfe
         }} />
       </div>
       <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
-        {/* + button com dropdown */}
-        <div style={{ position: 'relative' }}>
-          <button onClick={() => setShowMenu(p => !p)} style={{
+
+        {/* ── Premium + button with hover menu ── */}
+        <div style={{ position: 'relative' }} onMouseEnter={openMenu} onMouseLeave={closeMenu}>
+          <button style={{
             width: 34, height: 34, borderRadius: '50%', display: 'flex', alignItems: 'center',
-            justifyContent: 'center', background: '#6B7280', border: 'none', cursor: 'pointer',
+            justifyContent: 'center', border: 'none', cursor: 'pointer',
+            background: showMenu
+              ? 'linear-gradient(135deg, #1d4ed8 0%, #0066D0 100%)'
+              : 'linear-gradient(135deg, #0066D0 0%, #2563EB 100%)',
+            boxShadow: showMenu
+              ? '0 4px 18px rgba(0,102,208,0.55), 0 0 0 3px rgba(0,102,208,0.15)'
+              : '0 2px 10px rgba(0,102,208,0.35)',
+            transform: showMenu ? 'scale(1.1)' : 'scale(1)',
+            transition: 'transform .22s cubic-bezier(.34,1.56,.64,1), box-shadow .22s ease, background .18s ease',
           }}>
-            <Icon name="plus" size={16} color="#fff" />
+            <span style={{
+              fontSize: 22, lineHeight: 1, color: '#fff', fontWeight: 300,
+              display: 'inline-block',
+              transform: showMenu ? 'rotate(45deg)' : 'rotate(0deg)',
+              transition: 'transform .22s cubic-bezier(.34,1.56,.64,1)',
+              marginTop: -1,
+            }}>+</span>
           </button>
-          {showMenu && (
-            <>
-              <div style={{ position: 'fixed', inset: 0, zIndex: 99 }} onClick={() => setShowMenu(false)} />
-              <div style={{
-                position: 'absolute', top: 40, right: 0, background: '#fff',
-                border: '1px solid #E5E7EB', borderRadius: 8,
-                boxShadow: '0 4px 20px rgba(0,0,0,0.12)', zIndex: 100, minWidth: 210, overflow: 'hidden',
-              }}>
-                {menuItems.map((item, i) => (
-                  <button key={i} onClick={item.action} style={{
-                    display: 'flex', alignItems: 'center', gap: 10, width: '100%',
-                    padding: '10px 14px', background: 'none', border: 'none', cursor: 'pointer',
-                    fontSize: 13, color: '#374151', fontFamily: 'inherit', textAlign: 'left',
-                    borderBottom: i < menuItems.length - 1 ? '1px solid #F3F4F6' : 'none',
-                  }}
-                  onMouseEnter={e => (e.currentTarget.style.background = '#F9FAFB')}
-                  onMouseLeave={e => (e.currentTarget.style.background = 'none')}>
-                    <Icon name={item.icon} size={14} color="#6B7280" />
-                    {item.label}
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
+
+          {/* Dropdown */}
+          <div style={{
+            position: 'absolute', top: 42, right: 0,
+            opacity: showMenu ? 1 : 0,
+            transform: showMenu ? 'translateY(0) scale(1)' : 'translateY(-10px) scale(0.96)',
+            pointerEvents: showMenu ? 'auto' : 'none',
+            transition: 'opacity .18s ease, transform .2s cubic-bezier(.34,1.3,.64,1)',
+            transformOrigin: 'top right',
+            background: '#fff',
+            border: '1px solid rgba(0,0,0,0.07)',
+            borderRadius: 14,
+            boxShadow: '0 12px 40px rgba(0,0,0,0.18), 0 3px 10px rgba(0,0,0,0.07)',
+            zIndex: 200, minWidth: 248, overflow: 'hidden',
+          }}>
+            {/* Header strip */}
+            <div style={{
+              padding: '10px 16px 8px',
+              fontSize: 10, fontWeight: 700, color: '#9CA3AF',
+              letterSpacing: '0.09em', textTransform: 'uppercase',
+              borderBottom: '1px solid #F3F4F6',
+              background: '#FAFAFA',
+            }}>Ação rápida</div>
+
+            {menuItems.map((item, i) => (
+              <button key={i} onClick={item.action}
+                onMouseEnter={() => setHoveredItem(i)}
+                onMouseLeave={() => setHoveredItem(null)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 12, width: '100%',
+                  padding: '11px 16px', background: hoveredItem === i ? item.bg : 'transparent',
+                  border: 'none', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
+                  borderBottom: i < menuItems.length - 1 ? '1px solid #F3F4F6' : 'none',
+                  transition: 'background .12s ease',
+                }}>
+                {/* Color icon bubble */}
+                <div style={{
+                  width: 34, height: 34, borderRadius: 9, flexShrink: 0,
+                  background: hoveredItem === i ? item.color : item.bg,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  transition: 'background .15s ease',
+                  boxShadow: hoveredItem === i ? `0 3px 10px ${item.color}40` : 'none',
+                }}>
+                  <Icon name={item.icon} size={14} color={hoveredItem === i ? '#fff' : item.color} />
+                </div>
+                {/* Text */}
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: hoveredItem === i ? item.color : '#111827', transition: 'color .12s ease' }}>{item.label}</div>
+                  <div style={{ fontSize: 11, color: '#9CA3AF', marginTop: 1 }}>{item.desc}</div>
+                </div>
+                {/* Arrow */}
+                <div style={{ marginLeft: 'auto', opacity: hoveredItem === i ? 1 : 0, transition: 'opacity .15s ease, transform .15s ease', transform: hoveredItem === i ? 'translateX(0)' : 'translateX(-4px)', color: item.color }}>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+                </div>
+              </button>
+            ))}
+
+            {/* Footer tip */}
+            <div style={{ padding: '7px 16px', background: '#FAFAFA', borderTop: '1px solid #F3F4F6', fontSize: 10, color: '#C4C9D4', textAlign: 'center' }}>
+              Pressione <kbd style={{ fontFamily: 'inherit', background: '#F3F4F6', borderRadius: 3, padding: '1px 4px', fontSize: 10, color: '#6B7280' }}>Ctrl</kbd> + <kbd style={{ fontFamily: 'inherit', background: '#F3F4F6', borderRadius: 3, padding: '1px 4px', fontSize: 10, color: '#6B7280' }}>N</kbd> para agendar
+            </div>
+          </div>
         </div>
+
         <div style={{ width: 1, height: 20, background: '#E5E7EB' }} />
-        <button style={{ width: 34, height: 34, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'none', border: 'none', cursor: 'pointer', color: '#6B7280', position: 'relative' }}>
-          <Icon name="bell" size={16} />
-          {notifCount > 0 && <span style={{ position: 'absolute', top: 6, right: 6, width: 7, height: 7, background: '#EF4444', borderRadius: '50%', border: '1.5px solid #fff' }} />}
-        </button>
-        <button style={{ width: 34, height: 34, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'none', border: 'none', cursor: 'pointer', color: '#6B7280' }}>
-          <Icon name="message" size={16} />
-        </button>
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', marginLeft: 2 }}>
           <div style={{
             width: 32, height: 32, borderRadius: '50%', background: '#0066D0',
@@ -324,10 +398,13 @@ function InternalTabs({ tabs, activeTab, onSelect, onClose }: {
 interface Patient {
   id: string; name: string; email?: string; phone?: string;
   birth_date?: string; gender?: string; insurance?: string;
+  insurance_number?: string; cpf?: string; address?: string;
+  city?: string; state?: string; zip_code?: string; notes?: string;
+  active?: boolean;
 }
 interface Appointment {
   id: string; patient_id: string; doctor_id?: string; date: string; start_time: string; end_time: string;
-  type: string; status: string; notes?: string; insurance?: string;
+  type: string; status: string; notes?: string; insurance?: string; amount?: number;
   patients?: Patient;
 }
 interface Transaction {
@@ -342,11 +419,16 @@ interface InventoryItem {
 interface MedicalRecord {
   id: string; patient_id: string; doctor_id?: string;
   clinical_history?: string; surgical_history?: string; family_history?: string;
-  habits?: string; allergies?: string;
+  habits?: string; allergies?: string; medications?: string;
   complaint?: string; evolution?: string; diagnosis?: string;
   diagnosis_code?: string; conduct?: string;
   return_date?: string; return_notes?: string;
+  duration_seconds?: number;
   created_at: string;
+}
+interface PrescriptionModel {
+  id: string; name: string;
+  items: { med: string; dose: string; freq: string; dur: string }[];
 }
 interface Prescription {
   id: string; patient_id: string; medical_record_id?: string;
@@ -362,6 +444,26 @@ function initials(name: string) {
   return name.split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase();
 }
 
+/** Copy text to clipboard with execCommand fallback for older browsers */
+function copyToClipboard(text: string): void {
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
+  } else {
+    fallbackCopy(text);
+  }
+}
+function fallbackCopy(text: string): void {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  try { document.execCommand('copy'); } catch {}
+  document.body.removeChild(ta);
+}
+
 function fmtCurrency(n: number) {
   return n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
@@ -372,9 +474,10 @@ function todayISO() {
 
 function weekRange() {
   const now = new Date();
-  const day = now.getDay();
-  const start = new Date(now); start.setDate(now.getDate() - day);
-  const end   = new Date(now); end.setDate(now.getDate() + (6 - day));
+  const day = now.getDay(); // 0=Sun
+  const diffToMon = (day + 6) % 7;  // days since Monday
+  const start = new Date(now); start.setDate(now.getDate() - diffToMon);
+  const end   = new Date(now); end.setDate(now.getDate() + (6 - diffToMon));
   return {
     start: start.toISOString().split('T')[0],
     end:   end.toISOString().split('T')[0],
@@ -436,13 +539,13 @@ function getBrazilHolidays(year: number): Record<string, string> {
 }
 
 const STATUS_COLORS: Record<string, { bg: string; color: string }> = {
-  em_atendimento: { bg: '#DBEAFE', color: '#0066D0' },
-  aguardando:     { bg: '#FEF3C7', color: '#92400E' },
-  confirmado:     { bg: '#F3E8FF', color: '#7C3AED' },
-  agendado:       { bg: '#F3E8FF', color: '#7C3AED' },
-  concluido:      { bg: '#D1FAE5', color: '#065F46' },
-  faltou:         { bg: '#FEE2E2', color: '#991B1B' },
-  cancelado:      { bg: '#F3F4F6', color: '#6B7280' },
+  agendado:       { bg: '#EFF6FF', color: '#2563EB' },
+  confirmado:     { bg: '#F0FDFA', color: '#0F766E' },
+  aguardando:     { bg: '#FEF3C7', color: '#D97706' },
+  em_atendimento: { bg: '#F5F3FF', color: '#7C3AED' },
+  concluido:      { bg: '#D1FAE5', color: '#10B981' },
+  faltou:         { bg: '#FEE2E2', color: '#EF4444' },
+  cancelado:      { bg: '#F3F4F6', color: '#9CA3AF' },
 };
 
 function statusBadge(s: string) {
@@ -461,13 +564,63 @@ function statusBadge(s: string) {
 /* ─────────────────────────────────────────
    DASHBOARD SCREEN
 ───────────────────────────────────────── */
-function Dashboard({ onNavigateProntuario }: { onNavigateProntuario?: (patientId: string) => void }) {
+/* ─────────────────────────────────────────
+   DASHBOARD — KPI CARD
+───────────────────────────────────────── */
+type KpiColor = 'blue' | 'emerald' | 'violet' | 'rose';
+function KpiCard({ label, value, sub, trend, trendVal, color, icon }: {
+  label: string; value: string | number; sub: string;
+  trend: 'up' | 'down' | 'neutral'; trendVal: string;
+  color: KpiColor; icon: React.ReactNode;
+}) {
+  const cm: Record<KpiColor,{bar:string; iconWrap:string; trendCls:string}> = {
+    blue:    { bar:'bg-blue-500',    iconWrap:'bg-blue-50 text-blue-600',    trendCls:'bg-blue-50 text-blue-700'    },
+    emerald: { bar:'bg-emerald-500', iconWrap:'bg-emerald-50 text-emerald-600', trendCls:'bg-emerald-50 text-emerald-700' },
+    violet:  { bar:'bg-violet-500',  iconWrap:'bg-violet-50 text-violet-600', trendCls:'bg-violet-50 text-violet-700' },
+    rose:    { bar:'bg-rose-500',    iconWrap:'bg-rose-50 text-rose-600',    trendCls:'bg-rose-50 text-rose-700'    },
+  };
+  const c = cm[color];
+  const TrendIcon = trend === 'up' ? TrendingUp : trend === 'down' ? TrendingDown : Minus;
+  return (
+    <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden flex flex-col">
+      <div className={`h-1 w-full ${c.bar}`} />
+      <div className="p-5 flex flex-col gap-3 flex-1">
+        <div className="flex items-start justify-between">
+          <span className="text-[10px] font-bold text-slate-400 tracking-widest uppercase leading-tight">{label}</span>
+          <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${c.iconWrap}`}>{icon}</div>
+        </div>
+        <div className="text-[2rem] font-extrabold text-slate-900 leading-none tracking-tight">{value}</div>
+        <div className="flex items-center justify-between mt-auto">
+          <span className="text-xs text-slate-400">{sub}</span>
+          <span className={`flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full ${c.trendCls}`}>
+            <TrendIcon size={10} />{trendVal}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────
+   DASHBOARD — MAIN COMPONENT
+───────────────────────────────────────── */
+function Dashboard({ onNavigateProntuario, onNewAppointment, onNewPatient, onNavigate }: {
+  onNavigateProntuario?: (patientId: string) => void;
+  onNewAppointment?: () => void;
+  onNewPatient?: () => void;
+  onNavigate?: (screen: string) => void;
+}) {
   const [appointments,  setAppointments]  = useState<Appointment[]>([]);
   const [transactions,  setTransactions]  = useState<Transaction[]>([]);
   const [totalPatients, setTotalPatients] = useState(0);
   const [newPtsWeek,    setNewPtsWeek]    = useState(0);
   const [lowStock,      setLowStock]      = useState<InventoryItem[]>([]);
-  const [loading,       setLoading]       = useState(true);
+  const [loading,       setLoading]       = useState(true);   // fase 1: consultas de hoje
+  const [kpiLoading,    setKpiLoading]    = useState(true);   // fase 2: KPIs + chart
+  const [showAnalytics, setShowAnalytics] = useState(false);
+  const [period,        setPeriod]        = useState<'hoje'|'semana'|'mes'>('hoje');
+  const [chartTx,       setChartTx]       = useState<Transaction[]>([]);
+  const doctor = React.useContext(DoctorContext);
 
   // Analytics section state
   type DocItem = { id: string; name: string };
@@ -482,21 +635,38 @@ function Dashboard({ onNavigateProntuario }: { onNavigateProntuario?: (patientId
   const load = () => {
     const today = todayISO();
     const { start, end } = weekRange();
-    setLoading(true);
+    const thirtyAgo = (() => { const d = new Date(); d.setDate(d.getDate()-30); return d.toISOString().split('T')[0]; })();
+
+    // ── Fase 1 (crítica): consultas de hoje → desbloqueia UI imediatamente
+    Promise.resolve(
+      supabase.from('appointments')
+        .select('*, patients(id,name,insurance)')
+        .eq('date', today)
+        .order('start_time')
+        .limit(50)
+    ).then(({ data }) => {
+      setAppointments((data as Appointment[]) ?? []);
+      setLoading(false); // mostra lista de hoje sem esperar KPIs
+    }).catch(() => setLoading(false));
+
+    // ── Fase 2 (background): KPIs + gráfico — não bloqueia o render
     Promise.all([
-      supabase.from('appointments').select('*, patients(id,name,insurance)').eq('date', today).order('start_time'),
-      supabase.from('transactions').select('*').gte('date', start).lte('date', end),
+      supabase.from('transactions').select('*').gte('date', start).lte('date', end).limit(500),
       supabase.from('patients').select('id', { count: 'exact', head: true }).eq('active', true),
       supabase.from('patients').select('id', { count: 'exact', head: true }).gte('created_at', start + 'T00:00:00'),
-      supabase.from('inventory_items').select('*').eq('active', true).filter('quantity', 'lte', 'min_quantity'),
-    ]).then(([appt, txn, total, newPts, stock]) => {
-      setAppointments((appt.data as Appointment[]) ?? []);
+      supabase.from('inventory_items').select('id,name,quantity,min_quantity,unit').eq('active', true),
+      supabase.from('transactions').select('amount,type,date').gte('date', thirtyAgo).order('date').limit(300),
+    ]).then(([txn, total, newPts, stock, ctxn]) => {
       setTransactions((txn.data as Transaction[]) ?? []);
       setTotalPatients(total.count ?? 0);
       setNewPtsWeek(newPts.count ?? 0);
       const allStock = (stock.data as InventoryItem[]) ?? [];
       setLowStock(allStock.filter(i => i.quantity <= i.min_quantity));
-      setLoading(false);
+      setChartTx((ctxn.data as Transaction[]) ?? []);
+      setKpiLoading(false);
+    }).catch(err => {
+      console.error('Dashboard KPI load error:', err);
+      setKpiLoading(false);
     });
   };
 
@@ -506,6 +676,7 @@ function Dashboard({ onNavigateProntuario }: { onNavigateProntuario?: (patientId
   }, []);
 
   useEffect(() => {
+    if (!showAnalytics) return; // carrega só quando o painel de análise é aberto
     const now = new Date();
     let start = '';
     if      (anPeriod === '7dias')  { const d = new Date(now); d.setDate(d.getDate()-7);  start = d.toISOString().split('T')[0]; }
@@ -513,7 +684,7 @@ function Dashboard({ onNavigateProntuario }: { onNavigateProntuario?: (patientId
     else if (anPeriod === 'mes')    start = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
     else                            start = new Date(now.getFullYear(), 0, 1).toISOString().split('T')[0];
     setAnLoading(true);
-    let apptQ = supabase.from('appointments').select('*').gte('date', start);
+    let apptQ = supabase.from('appointments').select('*').gte('date', start).limit(1000);
     if (anProf !== 'todos') apptQ = apptQ.eq('doctor_id', anProf);
     Promise.all([
       apptQ,
@@ -530,12 +701,58 @@ function Dashboard({ onNavigateProntuario }: { onNavigateProntuario?: (patientId
         setAnAvgDur(ad.length > 0 ? Math.round(ad.reduce((s,a) => s+(TYPE_DUR[a.type]??30),0)/ad.length) : 0);
       }
       setAnLoading(false);
+    }).catch(err => {
+      console.error('Analytics load error:', err);
+      setAnLoading(false);
     });
-  }, [anPeriod, anProf]);
+  }, [anPeriod, anProf, showAnalytics]);
 
   useEffect(() => { load(); }, []);
 
-  if (loading) return <Spinner />;
+  // Skeleton para KPI cards enquanto fase 2 carrega
+  const KpiSkeleton = () => (
+    <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden flex flex-col animate-pulse">
+      <div className="h-1 w-full bg-slate-200" />
+      <div className="p-5 flex flex-col gap-3 flex-1">
+        <div className="flex items-start justify-between">
+          <div className="h-2 bg-slate-200 rounded w-20" />
+          <div className="w-9 h-9 rounded-xl bg-slate-200" />
+        </div>
+        <div className="h-8 bg-slate-200 rounded w-16" />
+        <div className="h-2 bg-slate-200 rounded w-28 mt-auto" />
+      </div>
+    </div>
+  );
+
+  if (loading) return (
+    <div className="flex-1 overflow-y-auto bg-slate-50" style={{ padding:'20px 24px' }}>
+      <div className="flex flex-col gap-5 max-w-[1400px] mx-auto">
+        {/* Header skeleton */}
+        <div className="flex items-center justify-between animate-pulse">
+          <div>
+            <div className="h-5 bg-slate-200 rounded w-52 mb-2" />
+            <div className="h-3 bg-slate-200 rounded w-36" />
+          </div>
+          <div className="flex gap-2">
+            <div className="h-9 bg-slate-200 rounded-xl w-36" />
+            <div className="h-9 bg-slate-200 rounded-xl w-36" />
+          </div>
+        </div>
+        {/* KPI cards */}
+        <div className="grid grid-cols-4 gap-4">
+          {[0,1,2,3].map(i => <KpiSkeleton key={i} />)}
+        </div>
+        {/* Body */}
+        <div className="grid grid-cols-5 gap-4 animate-pulse">
+          <div className="col-span-3 bg-white rounded-2xl border border-slate-100 h-64" />
+          <div className="col-span-2 bg-white rounded-2xl border border-slate-100 h-64" />
+        </div>
+        <div className="grid grid-cols-3 gap-4 animate-pulse">
+          {[0,1,2].map(i => <div key={i} className="bg-white rounded-2xl border border-slate-100 h-48" />)}
+        </div>
+      </div>
+    </div>
+  );
 
   const today      = todayISO();
   const confirmed  = appointments.filter(a => ['confirmado','agendado'].includes(a.status)).length;
@@ -550,406 +767,700 @@ function Dashboard({ onNavigateProntuario }: { onNavigateProntuario?: (patientId
   const pendRecVal = pendRec.reduce((s,t) => s + Number(t.amount), 0);
   const pendDespVal= pendDesp.reduce((s,t) => s + Number(t.amount), 0);
 
-  const kpis = [
-    { label:'Pacientes do Dia',        value:String(totalAppt),       sub:`${confirmed} confirmados · ${waiting} aguardando`, prog:totalAppt?Math.round(confirmed/totalAppt*100):0, color:'#0066D0', bg:'#EFF6FF', icon:'user',      iconColor:'#0066D0' },
-    { label:'Faturamento da Semana',   value:fmtCurrency(receitas),   sub:`saldo ${fmtCurrency(saldo)}`,                      prog:receitas?Math.round((receitas-despesas)/receitas*100):0, color:'#14B8A6', bg:'#F0FDFA', icon:'dollar',    iconColor:'#14B8A6' },
-    { label:'Atendimentos Realizados', value:String(attended),        sub:`de ${totalAppt} agendados hoje`,                   prog:totalAppt?Math.round(attended/totalAppt*100):0,   color:'#10B981', bg:'#D1FAE5', icon:'check',     iconColor:'#10B981' },
-    { label:'Total de Pacientes',      value:String(totalPatients),   sub:`${newPtsWeek} novo${newPtsWeek!==1?'s':''} esta semana`, prog:Math.min(totalPatients,100),                 color:'#FBBF24', bg:'#FEF3C7', icon:'user-plus', iconColor:'#FBBF24' },
-  ];
+  const faltasHoje = appointments.filter(a => a.status === 'faltou').length;
+  const nowD = new Date();
+  const dGreeting = nowD.getHours() < 12 ? 'Bom dia' : nowD.getHours() < 18 ? 'Boa tarde' : 'Boa noite';
+  const heroAppt = appointments.find(a => a.status === 'em_atendimento')
+    ?? appointments.filter(a => ['aguardando','confirmado','agendado'].includes(a.status))
+         .sort((a,b) => (a.start_time??'').localeCompare(b.start_time??''))[0];
+  const dTypeLabel: Record<string,string> = {
+    consulta:'Consulta', retorno:'Retorno', primeira_consulta:'1ª Consulta',
+    avaliacao:'Avaliação', exame:'Exame', procedimento:'Procedimento', teleconsulta:'Teleconsulta',
+  };
 
-  const days   = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
-  const maxRec = Math.max(...days.map((_,i) => transactions.filter(t=>t.type==='receita'&&new Date(t.date+'T12:00:00').getDay()===i).reduce((s,t)=>s+Number(t.amount),0)),1);
-  const barData = days.map((day, i) => {
-    const rec  = transactions.filter(t=>t.type==='receita'&&new Date(t.date+'T12:00:00').getDay()===i).reduce((s,t)=>s+Number(t.amount),0);
-    const desp = transactions.filter(t=>t.type==='despesa'&&new Date(t.date+'T12:00:00').getDay()===i).reduce((s,t)=>s+Number(t.amount),0);
-    return { day, rec, desp, recH:Math.round(rec/maxRec*100), despH:Math.round(desp/maxRec*100), active:new Date().getDay()===i };
-  });
-
-  const avatarColors = ['#DBEAFE','#FEF3C7','#F0FDFA','#F3E8FF','#FEE2E2'];
-  const avatarText   = ['#0066D0','#92400E','#0F766E','#7C3AED','#991B1B'];
-
-  const updateStatus = (id: string, status: string) =>
+  const updateStatus = (id: string, status: string) => {
+    const prev = appointments.find(x => x.id === id);
+    setAppointments(a => a.map(x => x.id === id ? { ...x, status } : x));
     supabase.from('appointments').update({ status }).eq('id', id)
-      .then(() => setAppointments(prev => prev.map(x => x.id===id ? {...x,status} : x)));
+      .then(({ error }) => {
+        if (error) {
+          setAppointments(a => a.map(x => x.id === id ? { ...x, status: prev?.status ?? x.status } : x));
+          alert('Erro ao atualizar status. Tente novamente.');
+        }
+      });
+  };
 
-  // Alertas
-  const alerts: { icon: string; color: string; bg: string; text: string }[] = [];
-  if (waiting > 0) alerts.push({ icon:'user', color:'#0066D0', bg:'#EFF6FF', text:`${waiting} paciente${waiting>1?'s':''} aguardando atendimento` });
-  lowStock.forEach(i => alerts.push({ icon:'alert', color:'#EF4444', bg:'#FEF2F2', text:`Estoque baixo: ${i.name} (${i.quantity} ${i.unit??'un'})` }));
-  if (pendRecVal > 0) alerts.push({ icon:'dollar', color:'#FBBF24', bg:'#FEF3C7', text:`${pendRec.length} receita${pendRec.length>1?'s':''} pendente${pendRec.length>1?'s':''}: ${fmtCurrency(pendRecVal)}` });
-  if (pendDespVal > 0) alerts.push({ icon:'dollar', color:'#EF4444', bg:'#FEE2E2', text:`${pendDesp.length} despesa${pendDesp.length>1?'s':''} pendente${pendDesp.length>1?'s':''}: ${fmtCurrency(pendDespVal)}` });
+  const suggestions: { icon:string; color:string; bg:string; text:string; action?:()=>void }[] = [];
+  if (waiting > 0) suggestions.push({ icon:'user', color:'#0066D0', bg:'#EFF6FF', text:`${waiting} paciente${waiting>1?'s':''} aguardando na sala de espera` });
+  lowStock.forEach(i => suggestions.push({ icon:'bell', color:'#EF4444', bg:'#FEE2E2', text:`Estoque crítico: ${i.name} (${i.quantity} ${i.unit??'un'})`, action:()=>onNavigate?.('estoque') }));
+  if (pendRecVal > 0) suggestions.push({ icon:'dollar', color:'#D97706', bg:'#FFFBEB', text:`${fmtCurrency(pendRecVal)} em receitas pendentes (${pendRec.length})`, action:()=>onNavigate?.('financas') });
+  if (pendDespVal > 0) suggestions.push({ icon:'dollar', color:'#EF4444', bg:'#FEE2E2', text:`${fmtCurrency(pendDespVal)} em despesas pendentes (${pendDesp.length})`, action:()=>onNavigate?.('financas') });
+
+  // 7-day chart data
+  const chartData = (() => {
+    const days: { day: string; receita: number; despesa: number }[] = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(nowD);
+      d.setDate(d.getDate() - i);
+      const iso = d.toISOString().split('T')[0];
+      const label = d.toLocaleDateString('pt-BR', { weekday: 'short' }).replace('.','');
+      const dayTx = chartTx.filter(t => t.date === iso);
+      days.push({
+        day: label.charAt(0).toUpperCase() + label.slice(1),
+        receita: dayTx.filter(t => t.type === 'receita').reduce((s,t) => s + Number(t.amount), 0),
+        despesa: dayTx.filter(t => t.type === 'despesa').reduce((s,t) => s + Number(t.amount), 0),
+      });
+    }
+    return days;
+  })();
+
+  const ssMap: Record<string,{c:string;bg:string;label:string}> = {
+    agendado:      {c:'#2563EB', bg:'#EFF6FF', label:'Agendado'},
+    confirmado:    {c:'#0F766E', bg:'#F0FDFA', label:'Confirmado'},
+    aguardando:    {c:'#D97706', bg:'#FEF3C7', label:'Aguardando'},
+    em_atendimento:{c:'#7C3AED', bg:'#F5F3FF', label:'Em atend.'},
+    concluido:     {c:'#10B981', bg:'#D1FAE5', label:'Concluído'},
+    faltou:        {c:'#EF4444', bg:'#FEE2E2', label:'Faltou'},
+    cancelado:     {c:'#9CA3AF', bg:'#F3F4F6', label:'Cancelado'},
+  };
 
   return (
-    <div style={{ flex:1, overflowY:'auto', padding:'20px 22px', background:'#F9FAFB', display:'flex', flexDirection:'column', gap:14 }}>
+    <div className="flex-1 overflow-y-auto bg-slate-50" style={{ padding:'20px 24px' }}>
+      <div className="flex flex-col gap-5 max-w-[1400px] mx-auto">
 
-      {/* KPIs */}
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:12 }}>
-        {kpis.map((k,i) => (
-          <Card key={i} style={{ padding:'14px 16px' }}>
-            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:10 }}>
-              <span style={{ fontSize:12, fontWeight:500, color:'#6B7280' }}>{k.label}</span>
-              <div style={{ width:30, height:30, borderRadius:7, background:k.bg, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
-                <Icon name={k.icon} size={15} color={k.iconColor} />
+        {/* HEADER */}
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-extrabold text-slate-900 leading-tight">
+              {dGreeting}, Dr. {(() => { const n = doctor.name.split(' ').slice(-1)[0]; return n.charAt(0).toUpperCase()+n.slice(1); })()} 👋
+            </h1>
+            <p className="text-sm text-slate-500 mt-0.5">
+              {nowD.toLocaleDateString('pt-BR',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}
+              {' · '}
+              <span className={totalAppt > 0 ? 'text-blue-600 font-medium' : 'text-slate-400'}>
+                {totalAppt} atendimento{totalAppt !== 1 ? 's' : ''} hoje
+              </span>
+            </p>
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="flex bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+              {(['hoje','semana','mes'] as const).map(p => (
+                <button key={p} onClick={() => setPeriod(p)}
+                  className={`px-4 py-2 text-xs font-semibold transition-all cursor-pointer border-0 ${period === p ? 'bg-blue-600 text-white' : 'text-slate-500 bg-white'}`}
+                  style={{ fontFamily:'inherit' }}>
+                  {p === 'hoje' ? 'Hoje' : p === 'semana' ? 'Semana' : 'Mês'}
+                </button>
+              ))}
+            </div>
+            <button className="relative w-10 h-10 rounded-xl bg-white border border-slate-200 shadow-sm flex items-center justify-center text-slate-500 cursor-pointer"
+              style={{ background:'#fff', border:'1px solid #E2E8F0' }}>
+              <Bell size={18} />
+              {(lowStock.length > 0 || pendRec.length > 0) && (
+                <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-rose-500 rounded-full" />
+              )}
+            </button>
+          </div>
+        </div>
+
+        {/* KPI CARDS */}
+        <div className="grid grid-cols-4 gap-4">
+          {kpiLoading ? (
+            [0,1,2,3].map(i => <KpiSkeleton key={i} />)
+          ) : (<>
+            <KpiCard
+              label="Pacientes hoje"
+              value={totalAppt}
+              sub={`${confirmed} confirmados`}
+              trend={totalAppt > 5 ? 'up' : totalAppt > 0 ? 'neutral' : 'down'}
+              trendVal={`${totalAppt} agendados`}
+              color="blue"
+              icon={<Users size={18} />}
+            />
+            <KpiCard
+              label="Faturamento semana"
+              value={fmtCurrency(receitas)}
+              sub={`${fmtCurrency(despesas)} em despesas`}
+              trend={saldo >= 0 ? 'up' : 'down'}
+              trendVal={`Saldo ${fmtCurrency(saldo)}`}
+              color="emerald"
+              icon={<DollarSign size={18} />}
+            />
+            <KpiCard
+              label="Atendidos hoje"
+              value={attended}
+              sub={totalAppt > 0 ? `${Math.round(attended/totalAppt*100)}% de conclusão` : 'Sem agendamentos'}
+              trend={attended > 0 ? 'up' : 'neutral'}
+              trendVal={`${waiting} aguardando`}
+              color="violet"
+              icon={<CheckCircle2 size={18} />}
+            />
+            <KpiCard
+              label="Faltas hoje"
+              value={faltasHoje}
+              sub={`${totalPatients} pacientes ativos`}
+              trend={faltasHoje > 2 ? 'down' : faltasHoje > 0 ? 'neutral' : 'up'}
+              trendVal={faltasHoje > 0 ? `${faltasHoje} falta${faltasHoje > 1 ? 's' : ''}` : 'Sem faltas'}
+              color="rose"
+              icon={<UserX size={18} />}
+            />
+          </>)}
+        </div>
+
+        {/* MIDDLE ROW: Chart + Hero + Finance */}
+        <div className="grid grid-cols-5 gap-4">
+
+          {/* Area Chart — Receita 7 dias */}
+          <div className="col-span-3 bg-white rounded-2xl shadow-sm border border-slate-100 p-5">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-sm font-bold text-slate-800">Receita vs Despesa</h3>
+                <p className="text-xs text-slate-400 mt-0.5">Últimos 7 dias</p>
+              </div>
+              <div className="flex gap-4 text-xs">
+                <span className="flex items-center gap-1.5 text-slate-500">
+                  <span style={{ display:'inline-block', width:12, height:2, background:'#3B82F6', borderRadius:9999 }} />Receita
+                </span>
+                <span className="flex items-center gap-1.5 text-slate-500">
+                  <span style={{ display:'inline-block', width:12, height:2, background:'#F87171', borderRadius:9999 }} />Despesa
+                </span>
               </div>
             </div>
-            <div style={{ fontSize:k.value.startsWith('R$')?16:28, fontWeight:700, color:'#111827', lineHeight:1, marginBottom:5 }}>{k.value}</div>
-            <div style={{ fontSize:11, color:'#9CA3AF' }}>{k.sub}</div>
-            <div style={{ height:5, background:'#F3F4F6', borderRadius:9999, marginTop:10, overflow:'hidden' }}>
-              <div style={{ height:'100%', width:Math.max(0,Math.min(100,k.prog))+'%', background:k.color, borderRadius:9999 }} />
-            </div>
-          </Card>
-        ))}
-      </div>
-
-      {/* Alertas — só aparece se houver algo */}
-      {alerts.length > 0 && (
-        <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
-          {alerts.map((a,i) => (
-            <div key={i} style={{ display:'flex', alignItems:'center', gap:7, padding:'7px 12px', background:a.bg, borderRadius:8, border:`1px solid ${a.color}22`, flex:'0 0 auto', maxWidth:'100%' }}>
-              <Icon name={a.icon} size={13} color={a.color} />
-              <span style={{ fontSize:12, color:a.color, fontWeight:500 }}>{a.text}</span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14 }}>
-
-        {/* Fila de Atendimento */}
-        <Card>
-          <div style={{ padding:'12px 16px', borderBottom:'1px solid #F3F4F6', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-            <span style={{ fontSize:13, fontWeight:600, color:'#111827' }}>Fila de Atendimento</span>
-            <span style={{ fontSize:12, color:'#9CA3AF' }}>Hoje · {new Date().toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'})}</span>
+            {kpiLoading ? (
+              <div className="animate-pulse bg-slate-100 rounded-xl" style={{ height: 180 }} />
+            ) : <ResponsiveContainer width="100%" height={180}>
+              <AreaChart data={chartData} margin={{ top:0, right:0, left:-20, bottom:0 }}>
+                <defs>
+                  <linearGradient id="gRec" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%"  stopColor="#3B82F6" stopOpacity={0.2} />
+                    <stop offset="95%" stopColor="#3B82F6" stopOpacity={0} />
+                  </linearGradient>
+                  <linearGradient id="gDesp" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%"  stopColor="#F87171" stopOpacity={0.15} />
+                    <stop offset="95%" stopColor="#F87171" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" />
+                <XAxis dataKey="day" tick={{ fontSize:11, fill:'#94A3B8' }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize:10, fill:'#94A3B8' }} axisLine={false} tickLine={false}
+                  tickFormatter={(v:number) => v === 0 ? '0' : `${(v/1000).toFixed(0)}k`} />
+                <Tooltip
+                  formatter={(v, name) => [fmtCurrency(Number(v ?? 0)), name === 'receita' ? 'Receita' : 'Despesa']}
+                  contentStyle={{ borderRadius:10, border:'1px solid #E2E8F0', fontSize:12, boxShadow:'0 4px 16px #0000001A' }} />
+                <Area type="monotone" dataKey="receita" stroke="#3B82F6" strokeWidth={2.5}
+                  fill="url(#gRec)" dot={false} activeDot={{ r:4, fill:'#3B82F6' }} />
+                <Area type="monotone" dataKey="despesa" stroke="#F87171" strokeWidth={2}
+                  fill="url(#gDesp)" dot={false} activeDot={{ r:3, fill:'#F87171' }} />
+              </AreaChart>
+            </ResponsiveContainer>}
           </div>
-          {appointments.length === 0
-            ? <div style={{ padding:'24px 16px', textAlign:'center', color:'#9CA3AF', fontSize:13 }}>Nenhum agendamento hoje</div>
-            : appointments.slice(0,6).map((a,i) => {
-                const name = a.patients?.name ?? 'Paciente';
-                const col  = avatarColors[i % avatarColors.length];
-                const tc   = avatarText[i % avatarText.length];
-                const isDone = ['concluido','faltou','cancelado'].includes(a.status);
-                return (
-                  <div key={a.id} style={{ display:'flex', alignItems:'center', gap:11, padding:'10px 16px', borderBottom:i<Math.min(appointments.length,6)-1?'1px solid #F9FAFB':'none', opacity:isDone?0.55:1 }}>
-                    <div style={{ width:36, height:36, borderRadius:'50%', background:col, color:tc, display:'flex', alignItems:'center', justifyContent:'center', fontSize:12, fontWeight:700, flexShrink:0 }}>{initials(name)}</div>
-                    <div style={{ flex:1, minWidth:0 }}>
-                      <div style={{ fontSize:13, fontWeight:600, color:'#111827', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{name}</div>
-                      <div style={{ fontSize:11, color:'#9CA3AF' }}>{a.start_time?.slice(0,5)} · {a.type.replace(/_/g,' ')}</div>
-                    </div>
-                    <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:4 }}>
-                      {statusBadge(a.status)}
-                      {a.status === 'agendado' && (
-                        <div style={{ display:'flex', gap:4 }}>
-                          <button onClick={() => updateStatus(a.id,'confirmado')} style={{ height:22, padding:'0 7px', background:'#10B981', color:'#fff', border:'none', borderRadius:4, fontSize:10, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>Confirmar</button>
-                          <button onClick={() => a.patient_id && onNavigateProntuario?.(a.patient_id)} style={{ height:22, padding:'0 7px', background:'#fff', color:'#374151', border:'1px solid #E5E7EB', borderRadius:4, fontSize:10, cursor:'pointer', fontFamily:'inherit' }}>Prontuário</button>
-                        </div>
-                      )}
-                      {a.status === 'confirmado' && (
-                        <div style={{ display:'flex', gap:4 }}>
-                          <button onClick={() => updateStatus(a.id,'aguardando')} style={{ height:22, padding:'0 7px', background:'#FBBF24', color:'#fff', border:'none', borderRadius:4, fontSize:10, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>Check-in</button>
-                          <button onClick={() => a.patient_id && onNavigateProntuario?.(a.patient_id)} style={{ height:22, padding:'0 7px', background:'#fff', color:'#374151', border:'1px solid #E5E7EB', borderRadius:4, fontSize:10, cursor:'pointer', fontFamily:'inherit' }}>Prontuário</button>
-                        </div>
-                      )}
-                      {a.status === 'aguardando' && (
-                        <div style={{ display:'flex', gap:4 }}>
-                          <button onClick={() => updateStatus(a.id,'em_atendimento')} style={{ height:22, padding:'0 7px', background:'#0066D0', color:'#fff', border:'none', borderRadius:4, fontSize:10, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>Chamar</button>
-                          <button onClick={() => a.patient_id && onNavigateProntuario?.(a.patient_id)} style={{ height:22, padding:'0 7px', background:'#fff', color:'#374151', border:'1px solid #E5E7EB', borderRadius:4, fontSize:10, cursor:'pointer', fontFamily:'inherit' }}>Prontuário</button>
-                        </div>
-                      )}
-                      {a.status === 'em_atendimento' && (
-                        <button onClick={() => updateStatus(a.id,'concluido')} style={{ height:22, padding:'0 7px', background:'#10B981', color:'#fff', border:'none', borderRadius:4, fontSize:10, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>Concluir</button>
-                      )}
-                    </div>
-                  </div>
-                );
-              })
-          }
-        </Card>
 
-        {/* Fluxo de Caixa */}
-        <Card style={{ display:'flex', flexDirection:'column' }}>
-          <div style={{ padding:'12px 16px', borderBottom:'1px solid #F3F4F6', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-            <span style={{ fontSize:13, fontWeight:600, color:'#111827' }}>Fluxo de Caixa da Semana</span>
-            <span style={{ fontSize:12, color:'#9CA3AF' }}>{new Date().toLocaleDateString('pt-BR',{month:'short',day:'2-digit'})}</span>
-          </div>
-          <div style={{ padding:'12px 16px 8px' }}>
-            <div style={{ fontSize:11, color:'#6B7280', marginBottom:2 }}>Saldo do período</div>
-            <div style={{ fontSize:22, fontWeight:700, color: saldo>=0?'#10B981':'#EF4444' }}>{fmtCurrency(saldo)}</div>
-            <div style={{ display:'flex', gap:16, marginTop:6 }}>
-              {[{dot:'#0066D0',label:'Receitas',val:fmtCurrency(receitas)},{dot:'#EF4444',label:'Despesas',val:fmtCurrency(despesas)}].map((s,i)=>(
-                <div key={i} style={{ display:'flex', alignItems:'center', gap:5 }}>
-                  <div style={{ width:8, height:8, borderRadius:2, background:s.dot }} />
-                  <span style={{ fontSize:11, color:'#9CA3AF' }}>{s.label}</span>
-                  <span style={{ fontSize:12, fontWeight:600, color:'#374151' }}>{s.val}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-          {/* Gráfico com valores */}
-          <div style={{ padding:'0 16px 4px' }}>
-            <div style={{ display:'flex', gap:4, alignItems:'flex-end', height:90 }}>
-              {barData.map((b,i) => (
-                <div key={i} style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center' }}>
-                  {b.rec > 0 && <div style={{ fontSize:9, color:'#0066D0', fontWeight:600, marginBottom:2, whiteSpace:'nowrap' }}>
-                    {b.rec >= 1000 ? `${(b.rec/1000).toFixed(1)}k` : String(Math.round(b.rec))}
-                  </div>}
-                  <div style={{ display:'flex', gap:2, alignItems:'flex-end', width:'100%', height:66 }}>
-                    <div style={{ flex:1, background: b.active?'#3B82F6':'#BFDBFE', height:(b.recH||3)+'%', borderRadius:'2px 2px 0 0', minHeight:3, transition:'height 0.3s' }} />
-                    <div style={{ flex:1, background: b.active?'#F87171':'#FECACA', height:(b.despH||3)+'%', borderRadius:'2px 2px 0 0', minHeight:3, transition:'height 0.3s' }} />
-                  </div>
-                  <div style={{ fontSize:10, color:b.active?'#111827':'#9CA3AF', marginTop:3, fontWeight:b.active?600:400 }}>{b.day}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-          {/* Pendentes — só mostra se houver */}
-          {(pendRecVal > 0 || pendDespVal > 0) ? (
-            <div style={{ margin:'4px 16px 14px', display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
-              {pendRecVal > 0 && (
-                <div style={{ background:'#F0FDF4', border:'1px solid #BBF7D0', borderRadius:6, padding:'8px 11px' }}>
-                  <div style={{ fontSize:11, color:'#6B7280', marginBottom:2 }}>Receitas pendentes</div>
-                  <div style={{ fontSize:14, fontWeight:700, color:'#10B981' }}>{fmtCurrency(pendRecVal)}</div>
-                  <div style={{ fontSize:10, color:'#9CA3AF', marginTop:1 }}>{pendRec.length} transação{pendRec.length>1?'s':''}</div>
-                </div>
-              )}
-              {pendDespVal > 0 && (
-                <div style={{ background:'#FEF2F2', border:'1px solid #FECACA', borderRadius:6, padding:'8px 11px' }}>
-                  <div style={{ fontSize:11, color:'#6B7280', marginBottom:2 }}>Despesas pendentes</div>
-                  <div style={{ fontSize:14, fontWeight:700, color:'#EF4444' }}>{fmtCurrency(pendDespVal)}</div>
-                  <div style={{ fontSize:10, color:'#9CA3AF', marginTop:1 }}>{pendDesp.length} transação{pendDesp.length>1?'s':''}</div>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div style={{ margin:'4px 16px 14px', padding:'8px 11px', background:'#F0FDF4', borderRadius:6, display:'flex', alignItems:'center', gap:6 }}>
-              <Icon name="check" size={13} color="#10B981" />
-              <span style={{ fontSize:12, color:'#10B981', fontWeight:500 }}>Sem pendências financeiras esta semana</span>
-            </div>
-          )}
-        </Card>
-      </div>
+          {/* Right col: Hero + Finance */}
+          <div className="col-span-2 flex flex-col gap-4">
 
-      {/* Linha do tempo do dia */}
-      <Card>
-        <div style={{ padding:'12px 16px', borderBottom:'1px solid #F3F4F6', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-          <span style={{ fontSize:13, fontWeight:600, color:'#111827' }}>Agenda de Hoje</span>
-          <span style={{ fontSize:12, color:'#9CA3AF' }}>{appointments.length} agendamento{appointments.length!==1?'s':''}</span>
-        </div>
-        {appointments.length === 0
-          ? <div style={{ padding:'20px 16px', textAlign:'center', color:'#9CA3AF', fontSize:13 }}>Nenhum agendamento para hoje</div>
-          : (
-            <div style={{ padding:'12px 16px', display:'flex', gap:0, overflowX:'auto', alignItems:'stretch', minHeight:80 }}>
-              {appointments.map((a,i) => {
-                const statusColor: Record<string,string> = { agendado:'#0066D0', confirmado:'#10B981', aguardando:'#FBBF24', em_atendimento:'#8B5CF6', concluido:'#6B7280', faltou:'#EF4444', cancelado:'#9CA3AF' };
-                const col = statusColor[a.status] ?? '#9CA3AF';
-                return (
-                  <div key={a.id} style={{ display:'flex', flexDirection:'column', alignItems:'center', minWidth:72, position:'relative', flex:'0 0 auto' }}>
-                    {i < appointments.length-1 && (
-                      <div style={{ position:'absolute', top:18, left:'50%', width:'100%', height:2, background:'#F3F4F6', zIndex:0 }} />
-                    )}
-                    <div style={{ width:36, height:36, borderRadius:'50%', background:col+'22', border:`2px solid ${col}`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:11, fontWeight:700, color:col, zIndex:1, flexShrink:0 }}>
-                      {a.start_time?.slice(0,5)}
-                    </div>
-                    <div style={{ fontSize:11, fontWeight:600, color:'#111827', marginTop:6, textAlign:'center', maxWidth:68, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-                      {(a.patients?.name ?? 'Paciente').split(' ')[0]}
-                    </div>
-                    <div style={{ fontSize:10, color:col, fontWeight:500, marginTop:1 }}>{a.status.replace('_',' ')}</div>
-                  </div>
-                );
-              })}
-            </div>
-          )
-        }
-      </Card>
-
-      {/* ── Analytics Section ── */}
-      {(() => {
-        const PROC_COLORS = ['#F59E0B','#0066D0','#10B981','#7C3AED','#EF4444','#EC4899','#06B6D4'];
-        const anConcluidos  = anAppts.filter(a => a.status === 'concluido').length;
-        const anFaltaram    = anAppts.filter(a => a.status === 'faltou').length;
-        const anConfirmados = anAppts.filter(a => ['confirmado','aguardando','em_atendimento','concluido'].includes(a.status)).length;
-        const anTotalPts    = anPatients.length;
-        const now3 = new Date();
-        let anStart = '';
-        if      (anPeriod === '7dias')  { const d = new Date(now3); d.setDate(d.getDate()-7);  anStart = d.toISOString().split('T')[0]; }
-        else if (anPeriod === '30dias') { const d = new Date(now3); d.setDate(d.getDate()-30); anStart = d.toISOString().split('T')[0]; }
-        else if (anPeriod === 'mes')    anStart = new Date(now3.getFullYear(), now3.getMonth(), 1).toISOString().split('T')[0];
-        else                            anStart = new Date(now3.getFullYear(), 0, 1).toISOString().split('T')[0];
-        const novos       = anPatients.filter(p => ((p as any).created_at??'').slice(0,10) >= anStart).length;
-        const recorrentes = Math.max(0, anTotalPts - novos);
-        const novosPct    = anTotalPts > 0 ? Math.round(novos/anTotalPts*100) : 0;
-        const homens      = anPatients.filter(p => p.gender === 'M').length;
-        const mulheres    = anPatients.filter(p => p.gender === 'F').length;
-        const homensPct   = anTotalPts > 0 ? Math.round(homens/anTotalPts*100) : 0;
-        const mulheresPct = anTotalPts > 0 ? Math.round(mulheres/anTotalPts*100) : 0;
-        const convenioA   = anAppts.filter(a => a.insurance && a.insurance !== 'Particular').length;
-        const particularA = anAppts.length - convenioA;
-        const convPct     = anAppts.length > 0 ? Math.round(convenioA/anAppts.length*100)   : 0;
-        const partPct     = anAppts.length > 0 ? Math.round(particularA/anAppts.length*100) : 0;
-        const PROC_TYPES  = [{value:'consulta',label:'Consulta'},{value:'retorno',label:'Retorno'},{value:'primeira_consulta',label:'1ª Consulta'},{value:'avaliacao',label:'Avaliação'},{value:'exame',label:'Exame'},{value:'procedimento',label:'Procedimento'},{value:'teleconsulta',label:'Teleconsulta'}];
-        const byType      = PROC_TYPES.map(t => ({ label:t.label, count:anAppts.filter(a=>a.type===t.value).length })).filter(t=>t.count>0).sort((a,b)=>b.count-a.count);
-        const totalProcs  = byType.reduce((s,t) => s+t.count, 0);
-        return (
-          <>
-            {/* Header filtros */}
-            <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
-              <span style={{ fontSize:13, fontWeight:600, color:'#111827', flex:1 }}>Análise do Período</span>
-              <span style={{ fontSize:13, color:'#6B7280' }}>Período</span>
-              <select value={anPeriod} onChange={e => setAnPeriod(e.target.value)}
-                style={{ height:30, border:'1px solid #E5E7EB', borderRadius:6, padding:'0 8px', fontSize:12, color:'#111827', background:'#fff', fontFamily:'inherit' }}>
-                <option value="7dias">Últimos 7 dias</option>
-                <option value="30dias">Últimos 30 dias</option>
-                <option value="mes">Este mês</option>
-                <option value="ano">Este ano</option>
-              </select>
-              <span style={{ fontSize:13, color:'#6B7280' }}>Profissional</span>
-              <select value={anProf} onChange={e => setAnProf(e.target.value)}
-                style={{ height:30, border:'1px solid #E5E7EB', borderRadius:6, padding:'0 8px', fontSize:12, color:'#111827', background:'#fff', fontFamily:'inherit', minWidth:160 }}>
-                <option value="todos">Todos</option>
-                {anDoctors.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-              </select>
-            </div>
-
-            {/* KPIs atendimentos */}
-            <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:12 }}>
-              {([
-                { label:'Pacientes agendados',    value:anAppts.length, numColor:'#374151', iconBg:'#F3F4F6', iconColor:'#6B7280', icon:'calendar' },
-                { label:'Pacientes confirmados',  value:anConfirmados,   numColor:'#0066D0', iconBg:'#EFF6FF', iconColor:'#0066D0', icon:'check' },
-                { label:'Pacientes atendidos',    value:anConcluidos,    numColor:'#10B981', iconBg:'#D1FAE5', iconColor:'#10B981', icon:'check' },
-                { label:'Pacientes que faltaram', value:anFaltaram,      numColor:'#EF4444', iconBg:'#FEE2E2', iconColor:'#EF4444', icon:'bell' },
-              ] as const).map((k,i) => (
-                <Card key={i} style={{ padding:'14px', display:'flex', flexDirection:'column', alignItems:'center', gap:4, textAlign:'center' }}>
-                  <div style={{ fontSize:32, fontWeight:700, color:k.numColor, lineHeight:1 }}>{k.value}</div>
-                  <div style={{ fontSize:12, color:'#6B7280' }}>{k.label}</div>
-                  <div style={{ width:32, height:32, borderRadius:8, background:k.iconBg, display:'flex', alignItems:'center', justifyContent:'center', marginTop:2 }}>
-                    <Icon name={k.icon} size={15} color={k.iconColor} />
-                  </div>
-                </Card>
-              ))}
-            </div>
-
-            {/* 4 gráficos */}
-            {anLoading ? <Spinner /> : (
-              <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:12 }}>
-
-                {/* Pacientes */}
-                <Card style={{ padding:'14px 16px' }}>
-                  <div style={{ fontSize:13, fontWeight:600, color:'#0066D0', marginBottom:10 }}>Pacientes</div>
-                  <div style={{ display:'flex', justifyContent:'center', marginBottom:8 }}>
-                    <DonutChart pct={novosPct} size={108} stroke={18} color="#60A5FA" bg="#BAE6FD">
-                      <div style={{ textAlign:'center' }}>
-                        <div style={{ fontSize:20, fontWeight:700, color:'#111827' }}>{anTotalPts}</div>
-                        <div style={{ fontSize:10, color:'#9CA3AF' }}>Pacientes</div>
-                      </div>
-                    </DonutChart>
-                  </div>
-                  <div style={{ display:'flex', gap:8, justifyContent:'center', marginBottom:10 }}>
-                    {[{label:'Novos',color:'#60A5FA',val:novos},{label:'Recorren...',color:'#BAE6FD',val:recorrentes}].map((l,i)=>(
-                      <div key={i} style={{ display:'flex', alignItems:'center', gap:4, fontSize:11, color:'#6B7280' }}>
-                        <div style={{ width:8, height:8, borderRadius:'50%', background:l.color }} />{l.label} ({l.val})
-                      </div>
-                    ))}
-                  </div>
-                  <div style={{ display:'flex', justifyContent:'space-around' }}>
-                    {[
-                      {label:'Homens', pct:homensPct,   total:homens,   color:'#0066D0', bg:'#DBEAFE'},
-                      {label:'Mulheres',pct:mulheresPct, total:mulheres, color:'#EC4899', bg:'#FCE7F3'},
-                    ].map((g,i) => (
-                      <div key={i} style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:3 }}>
-                        <DonutChart pct={g.pct} size={42} stroke={7} color={g.color} bg={g.bg}>
-                          <span style={{ fontSize:9, fontWeight:700, color:g.color }}>{g.pct}%</span>
-                        </DonutChart>
-                        <div style={{ textAlign:'center' }}>
-                          <div style={{ fontSize:11, fontWeight:600, color:g.color }}>{g.label}</div>
-                          <div style={{ fontSize:10, color:'#9CA3AF' }}>Total: {g.total}</div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </Card>
-
-                {/* Procedimentos */}
-                <Card style={{ padding:'14px 16px' }}>
-                  <div style={{ fontSize:13, fontWeight:600, color:'#0066D0', marginBottom:10 }}>Procedimentos realizados</div>
-                  <div style={{ display:'flex', justifyContent:'center', marginBottom:10 }}>
-                    <DonutChart pct={totalProcs>0?100:0} size={108} stroke={18} color={PROC_COLORS[0]} bg="#E5E7EB">
-                      <div style={{ textAlign:'center' }}>
-                        <div style={{ fontSize:26, fontWeight:700, color:'#111827' }}>{totalProcs}</div>
-                        <div style={{ fontSize:10, color:'#9CA3AF' }}>Procedimentos</div>
-                      </div>
-                    </DonutChart>
-                  </div>
-                  {byType.length === 0
-                    ? <div style={{ textAlign:'center', fontSize:11, color:'#9CA3AF' }}>Sem dados</div>
-                    : <div style={{ display:'flex', flexDirection:'column', gap:5 }}>
-                        {byType.slice(0,4).map((t,i) => (
-                          <div key={i} style={{ display:'flex', alignItems:'center', gap:5 }}>
-                            <div style={{ width:8, height:8, borderRadius:'50%', background:PROC_COLORS[i%PROC_COLORS.length], flexShrink:0 }} />
-                            <span style={{ flex:1, fontSize:11, color:'#6B7280', overflow:'hidden', whiteSpace:'nowrap', textOverflow:'ellipsis' }}>{t.label}</span>
-                            <span style={{ fontSize:11, fontWeight:600, color:'#111827' }}>{t.count}</span>
-                          </div>
-                        ))}
-                      </div>
-                  }
-                </Card>
-
-                {/* Convênio */}
-                <Card style={{ padding:'14px 16px' }}>
-                  <div style={{ fontSize:13, fontWeight:600, color:'#0066D0', marginBottom:10 }}>Pacientes x Convênio</div>
-                  <div style={{ display:'flex', justifyContent:'center', marginBottom:10 }}>
-                    <DonutChart pct={partPct} size={108} stroke={18} color="#60A5FA" bg="#FDE68A">
-                      <div style={{ textAlign:'center' }}>
-                        <div style={{ fontSize:20, fontWeight:700, color:'#111827' }}>{anAppts.length}</div>
-                        <div style={{ fontSize:10, color:'#9CA3AF' }}>Pacientes</div>
-                      </div>
-                    </DonutChart>
-                  </div>
-                  <div style={{ display:'flex', flexDirection:'column', gap:7 }}>
-                    {[
-                      {label:'Particular',count:particularA,pct:partPct,color:'#60A5FA'},
-                      {label:'Convênio',  count:convenioA,  pct:convPct, color:'#F59E0B'},
-                    ].map((row,i) => (
-                      <div key={i} style={{ display:'flex', alignItems:'center', gap:6 }}>
-                        <div style={{ width:8, height:8, borderRadius:'50%', background:row.color, flexShrink:0 }} />
-                        <span style={{ flex:1, fontSize:12, color:'#6B7280' }}>{row.label}</span>
-                        <span style={{ fontSize:12, fontWeight:700, color:'#111827' }}>{row.count}</span>
-                        <span style={{ fontSize:11, color:'#9CA3AF', minWidth:28, textAlign:'right' }}>{row.pct}%</span>
-                      </div>
-                    ))}
-                  </div>
-                </Card>
-
-                {/* Duração */}
-                <Card style={{ padding:'14px 16px' }}>
-                  <div style={{ fontSize:13, fontWeight:600, color:'#0066D0', marginBottom:10 }}>Duração do atendimento</div>
-                  <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:8, marginBottom:14 }}>
-                    <Icon name="clock" size={22} color="#6B7280" />
-                    <span style={{ fontSize:28, fontWeight:700, color:'#111827', fontStyle:'italic' }}>
-                      {anAvgDur > 0 ? `${anAvgDur}min` : '—'}
+            {/* Próximo Atendimento */}
+            {heroAppt ? (
+              <div className="flex-1 rounded-2xl p-5 flex flex-col gap-3"
+                style={{ background:'linear-gradient(135deg,#1D4ED8 0%,#4338CA 100%)', boxShadow:'0 4px 20px #1D4ED833' }}>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400"
+                      style={{ boxShadow:'0 0 0 3px #4ade8044' }} />
+                    <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color:'#BAE6FD' }}>
+                      {heroAppt.status === 'em_atendimento' ? 'Em atendimento' : 'Próximo'}
                     </span>
                   </div>
-                  <div style={{ fontSize:12, fontWeight:600, color:'#0066D0', marginBottom:8 }}>Tipo de atendimento</div>
-                  {anAppts.length === 0
-                    ? <div style={{ textAlign:'center', fontSize:11, color:'#9CA3AF' }}>Sem dados</div>
-                    : <div style={{ display:'flex', gap:10, alignItems:'flex-end', height:64, padding:'0 8px' }}>
-                        {[
-                          {label:'Particular',pct:partPct,color:'#60A5FA'},
-                          {label:'Convênio',  pct:convPct, color:'#E5E7EB'},
-                        ].map((b,i) => (
-                          <div key={i} style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:3 }}>
-                            <span style={{ fontSize:10, fontWeight:600, color:'#374151' }}>{b.pct}%</span>
-                            <div style={{ width:'100%', height:Math.max(b.pct*0.5,3), background:b.color, borderRadius:'3px 3px 0 0' }} />
-                            <span style={{ fontSize:9, color:'#9CA3AF', textAlign:'center', lineHeight:1.2 }}>{b.label}</span>
-                          </div>
-                        ))}
-                      </div>
-                  }
-                </Card>
+                  <span className="text-xl font-extrabold text-white">{heroAppt.start_time?.slice(0,5)}</span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-full flex items-center justify-center text-base font-bold text-white flex-shrink-0"
+                    style={{ background:'rgba(255,255,255,0.2)', border:'2px solid rgba(255,255,255,0.35)' }}>
+                    {initials(heroAppt.patients?.name ?? 'P')}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-base font-bold text-white truncate">{heroAppt.patients?.name ?? 'Paciente'}</div>
+                    <div className="flex gap-1.5 mt-1 flex-wrap">
+                      <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full text-white"
+                        style={{ background:'rgba(255,255,255,0.2)' }}>
+                        {dTypeLabel[heroAppt.type] ?? heroAppt.type}
+                      </span>
+                      {heroAppt.patients?.insurance && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full" style={{ background:'rgba(255,255,255,0.1)', color:'#BAE6FD' }}>
+                          {heroAppt.patients.insurance}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex gap-2 flex-wrap">
+                  {heroAppt.status === 'agendado' && <>
+                    <button onClick={() => updateStatus(heroAppt.id,'confirmado')}
+                      style={{ flex:1, height:32, background:'#fff', color:'#1D4ED8', border:'none', borderRadius:8, fontSize:12, fontWeight:700, cursor:'pointer', fontFamily:'inherit' }}>
+                      ✓ Confirmar
+                    </button>
+                    <button onClick={() => { if (window.confirm('Marcar como faltou?')) updateStatus(heroAppt.id,'faltou'); }}
+                      style={{ height:32, padding:'0 12px', background:'rgba(255,255,255,0.1)', color:'#FCA5A5', border:'1px solid rgba(255,100,100,0.4)', borderRadius:8, fontSize:11, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>
+                      Faltou
+                    </button>
+                  </>}
+                  {heroAppt.status === 'confirmado' && <>
+                    <button onClick={() => updateStatus(heroAppt.id,'aguardando')}
+                      style={{ flex:1, height:32, background:'#FBBF24', color:'#fff', border:'none', borderRadius:8, fontSize:12, fontWeight:700, cursor:'pointer', fontFamily:'inherit' }}>
+                      Check-in na Sala
+                    </button>
+                    <button onClick={() => { if (window.confirm('Marcar como faltou?')) updateStatus(heroAppt.id,'faltou'); }}
+                      style={{ height:32, padding:'0 12px', background:'rgba(255,255,255,0.1)', color:'#FCA5A5', border:'1px solid rgba(255,100,100,0.4)', borderRadius:8, fontSize:11, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>
+                      Faltou
+                    </button>
+                  </>}
+                  {heroAppt.status === 'aguardando' && <>
+                    <button onClick={() => updateStatus(heroAppt.id,'em_atendimento')}
+                      style={{ flex:1, height:32, background:'#fff', color:'#1D4ED8', border:'none', borderRadius:8, fontSize:12, fontWeight:700, cursor:'pointer', fontFamily:'inherit' }}>
+                      ▶ Iniciar Atendimento
+                    </button>
+                    <button onClick={() => { if (window.confirm('Marcar como faltou?')) updateStatus(heroAppt.id,'faltou'); }}
+                      style={{ height:32, padding:'0 12px', background:'rgba(255,255,255,0.1)', color:'#FCA5A5', border:'1px solid rgba(255,100,100,0.4)', borderRadius:8, fontSize:11, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>
+                      Faltou
+                    </button>
+                  </>}
+                  {heroAppt.status === 'em_atendimento' && (
+                    <button onClick={() => updateStatus(heroAppt.id,'concluido')}
+                      style={{ flex:1, height:32, background:'#10B981', color:'#fff', border:'none', borderRadius:8, fontSize:12, fontWeight:700, cursor:'pointer', fontFamily:'inherit' }}>
+                      ✓ Concluir Atendimento
+                    </button>
+                  )}
+                  {heroAppt.patient_id && (
+                    <button onClick={() => onNavigateProntuario?.(heroAppt.patient_id)}
+                      style={{ height:32, padding:'0 12px', background:'rgba(255,255,255,0.12)', color:'#fff', border:'1px solid rgba(255,255,255,0.2)', borderRadius:8, fontSize:11, cursor:'pointer', fontFamily:'inherit' }}>
+                      📋 Prontuário
+                    </button>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="flex-1 rounded-2xl border-2 border-dashed border-slate-200 bg-white flex flex-col items-center justify-center gap-2 p-6 text-center" style={{ minHeight:160 }}>
+                <Calendar size={32} style={{ color:'#CBD5E1' }} />
+                <div className="text-sm font-semibold text-slate-400">Sem atendimentos pendentes</div>
+                <button onClick={onNewAppointment}
+                  style={{ marginTop:4, height:32, padding:'0 16px', background:'#2563EB', color:'#fff', border:'none', borderRadius:8, fontSize:12, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>
+                  + Novo Agendamento
+                </button>
               </div>
             )}
-          </>
-        );
-      })()}
 
+            {/* Financeiro resumo */}
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-4">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-xs font-bold text-slate-700">Financeiro da Semana</span>
+                <button onClick={() => onNavigate?.('financas')}
+                  style={{ fontSize:11, color:'#2563EB', fontWeight:600, background:'transparent', border:'none', cursor:'pointer', fontFamily:'inherit' }}>
+                  Ver mais →
+                </button>
+              </div>
+              <div className="text-2xl font-extrabold leading-none mb-3"
+                style={{ color: saldo >= 0 ? '#10B981' : '#EF4444' }}>
+                {fmtCurrency(saldo)}
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="rounded-xl p-2.5" style={{ background:'#F0FDF4' }}>
+                  <div className="text-[10px] text-slate-500 mb-1">↑ Receitas</div>
+                  <div className="text-sm font-bold" style={{ color:'#10B981' }}>{fmtCurrency(receitas)}</div>
+                </div>
+                <div className="rounded-xl p-2.5" style={{ background:'#FEF2F2' }}>
+                  <div className="text-[10px] text-slate-500 mb-1">↓ Despesas</div>
+                  <div className="text-sm font-bold" style={{ color:'#EF4444' }}>{fmtCurrency(despesas)}</div>
+                </div>
+              </div>
+              {(pendRecVal > 0 || pendDespVal > 0) && (
+                <div className="mt-2 px-2.5 py-1.5 rounded-lg border text-[11px] font-medium"
+                  style={{ background:'#FFFBEB', borderColor:'#FDE68A', color:'#92400E' }}>
+                  ⚠️ {pendRec.length + pendDesp.length} transação(ões) pendente(s) · {fmtCurrency(pendRecVal + pendDespVal)}
+                </div>
+              )}
+            </div>
+
+          </div>
+        </div>
+
+        {/* BOTTOM ROW: Agenda + Assistente */}
+        <div className="grid grid-cols-5 gap-4">
+
+          {/* Agenda do Dia */}
+          <div className="col-span-3 bg-white rounded-2xl shadow-sm border border-slate-100 flex flex-col overflow-hidden">
+            <div className="px-5 py-3.5 flex items-center justify-between flex-shrink-0"
+              style={{ borderBottom:'1px solid #F1F5F9' }}>
+              <div className="flex items-center gap-3">
+                <h3 className="text-sm font-bold text-slate-800">Agenda de Hoje</h3>
+                <span className="text-xs text-slate-400">
+                  {nowD.toLocaleDateString('pt-BR',{day:'numeric',month:'short'})}
+                </span>
+              </div>
+              <div className="flex gap-3 items-center">
+                {[
+                  {color:'#10B981',label:'Concluído'},
+                  {color:'#7C3AED',label:'Em atend.'},
+                  {color:'#D97706',label:'Aguardando'},
+                  {color:'#EF4444',label:'Faltou'},
+                ].map((l,i) => (
+                  <div key={i} className="flex items-center gap-1 text-[10px] text-slate-400">
+                    <div className="w-1.5 h-1.5 rounded-full" style={{ background:l.color }} />{l.label}
+                  </div>
+                ))}
+              </div>
+            </div>
+            {appointments.length === 0 ? (
+              <div className="flex-1 flex flex-col items-center justify-center gap-3 py-12 text-center">
+                <Calendar size={36} style={{ color:'#E2E8F0' }} />
+                <div className="text-sm font-medium text-slate-400">Nenhum agendamento hoje</div>
+                <button onClick={onNewAppointment}
+                  style={{ height:32, padding:'0 14px', background:'#EFF6FF', color:'#2563EB', border:'1px solid #BFDBFE', borderRadius:8, fontSize:12, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>
+                  + Criar Agendamento
+                </button>
+              </div>
+            ) : (
+              <div style={{ overflowY:'auto', flex:1 }}>
+                {appointments.map((a, i) => {
+                  const name = a.patients?.name ?? 'Paciente';
+                  const avatarBg  = ['#DBEAFE','#FEF3C7','#F0FDFA','#F3E8FF','#FEE2E2'][i%5];
+                  const avatarTxt = ['#0066D0','#92400E','#0F766E','#7C3AED','#991B1B'][i%5];
+                  const isDone = ['concluido','faltou','cancelado'].includes(a.status);
+                  const ss = ssMap[a.status] ?? {c:'#9CA3AF', bg:'#F3F4F6', label:a.status};
+                  return (
+                    <div key={a.id} style={{
+                      display:'flex', alignItems:'center', gap:10, padding:'10px 20px',
+                      borderBottom: i < appointments.length-1 ? '1px solid #F8FAFC' : 'none',
+                      background: a.status==='em_atendimento' ? '#FAFAFF' : 'transparent',
+                      opacity: isDone ? 0.6 : 1,
+                    }}>
+                      <div style={{ width:40, textAlign:'center', flexShrink:0 }}>
+                        <div style={{ fontSize:13, fontWeight:700, color:isDone?'#9CA3AF':'#111827' }}>{a.start_time?.slice(0,5)}</div>
+                        <div style={{ fontSize:10, color:'#CBD5E1' }}>{a.end_time?.slice(0,5)}</div>
+                      </div>
+                      <div style={{ width:3, height:38, borderRadius:9999, background:ss.c, flexShrink:0 }} />
+                      <div style={{ width:34, height:34, borderRadius:'50%', background:avatarBg, color:avatarTxt, display:'flex', alignItems:'center', justifyContent:'center', fontSize:12, fontWeight:700, flexShrink:0 }}>
+                        {initials(name)}
+                      </div>
+                      <div style={{ flex:1, minWidth:0 }}>
+                        <div style={{ fontSize:13, fontWeight:600, color:'#111827', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{name}</div>
+                        <div style={{ fontSize:11, color:'#9CA3AF', display:'flex', gap:4, alignItems:'center', marginTop:1 }}>
+                          {dTypeLabel[a.type] ?? a.type.replace(/_/g,' ')}
+                          {a.patients?.insurance && <><span>·</span><span>{a.patients.insurance}</span></>}
+                        </div>
+                      </div>
+                      <span style={{ fontSize:10, fontWeight:600, padding:'2px 8px', background:ss.bg, color:ss.c, borderRadius:20, flexShrink:0, whiteSpace:'nowrap' }}>
+                        {ss.label}
+                      </span>
+                      <div style={{ display:'flex', gap:4, flexShrink:0 }}>
+                        {a.status==='agendado' && <>
+                          <button onClick={()=>updateStatus(a.id,'confirmado')}
+                            style={{ height:24, padding:'0 8px', background:'#10B981', color:'#fff', border:'none', borderRadius:5, fontSize:10, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>Confirmar</button>
+                          <button onClick={()=>{ if(window.confirm('Marcar como faltou?')) updateStatus(a.id,'faltou'); }}
+                            style={{ height:24, padding:'0 8px', background:'#EF4444', color:'#fff', border:'none', borderRadius:5, fontSize:10, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>Faltou</button>
+                        </>}
+                        {a.status==='confirmado' && <>
+                          <button onClick={()=>updateStatus(a.id,'aguardando')}
+                            style={{ height:24, padding:'0 8px', background:'#FBBF24', color:'#fff', border:'none', borderRadius:5, fontSize:10, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>Check-in</button>
+                          <button onClick={()=>{ if(window.confirm('Marcar como faltou?')) updateStatus(a.id,'faltou'); }}
+                            style={{ height:24, padding:'0 8px', background:'#EF4444', color:'#fff', border:'none', borderRadius:5, fontSize:10, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>Faltou</button>
+                        </>}
+                        {a.status==='aguardando' && <>
+                          <button onClick={()=>updateStatus(a.id,'em_atendimento')}
+                            style={{ height:24, padding:'0 8px', background:'#2563EB', color:'#fff', border:'none', borderRadius:5, fontSize:10, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>▶ Iniciar</button>
+                          <button onClick={()=>{ if(window.confirm('Marcar como faltou?')) updateStatus(a.id,'faltou'); }}
+                            style={{ height:24, padding:'0 8px', background:'#EF4444', color:'#fff', border:'none', borderRadius:5, fontSize:10, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>Faltou</button>
+                        </>}
+                        {a.status==='em_atendimento' && (
+                          <button onClick={()=>updateStatus(a.id,'concluido')}
+                            style={{ height:24, padding:'0 8px', background:'#10B981', color:'#fff', border:'none', borderRadius:5, fontSize:10, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>✓ Concluir</button>
+                        )}
+                        {a.patient_id && (
+                          <button onClick={()=>onNavigateProntuario?.(a.patient_id)}
+                            style={{ height:24, padding:'0 8px', background:'#F1F5F9', color:'#374151', border:'none', borderRadius:5, fontSize:10, cursor:'pointer', fontFamily:'inherit' }}>📋</button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Coluna direita: Assistente + Base de Pacientes */}
+          <div className="col-span-2 flex flex-col gap-4">
+
+            {/* Assistente Inteligente */}
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 flex flex-col">
+              <div className="flex items-center gap-3 px-4 py-3" style={{ borderBottom:'1px solid #F1F5F9' }}>
+                <div className="w-8 h-8 rounded-xl flex items-center justify-center text-base flex-shrink-0"
+                  style={{ background:'linear-gradient(135deg,#1D4ED8,#7C3AED)' }}>🤖</div>
+                <div>
+                  <div className="text-xs font-bold text-slate-800">Assistente Inteligente</div>
+                  <div className="text-[10px] text-slate-400">Insights e alertas do dia</div>
+                </div>
+              </div>
+              <div className="p-3 flex flex-col gap-2">
+                {suggestions.length === 0 ? (
+                  <div className="flex items-center gap-3 p-3 rounded-xl" style={{ background:'#F0FDF4' }}>
+                    <span style={{ fontSize:20 }}>✅</span>
+                    <div>
+                      <div className="text-xs font-bold" style={{ color:'#065F46' }}>Tudo em ordem!</div>
+                      <div className="text-[10px]" style={{ color:'#059669' }}>Nenhum alerta no momento</div>
+                    </div>
+                  </div>
+                ) : suggestions.map((s, i) => (
+                  <div key={i} style={{ display:'flex', alignItems:'center', gap:8, padding:'8px 10px', background:s.bg, borderRadius:10, border:`1px solid ${s.color}22` }}>
+                    <Icon name={s.icon} size={13} color={s.color} />
+                    <span style={{ flex:1, fontSize:11, color:s.color, fontWeight:500, lineHeight:1.3 }}>{s.text}</span>
+                    {s.action && (
+                      <button onClick={s.action}
+                        style={{ fontSize:10, fontWeight:700, color:s.color, background:'transparent', border:'none', cursor:'pointer', fontFamily:'inherit', padding:0, textDecoration:'underline', flexShrink:0 }}>
+                        Ver →
+                      </button>
+                    )}
+                  </div>
+                ))}
+                {totalAppt > 0 && (
+                  <div style={{ marginTop:4, padding:'10px 12px', background:'#F8FAFC', borderRadius:10, border:'1px solid #F1F5F9' }}>
+                    <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6 }}>
+                      <span style={{ fontSize:11, color:'#6B7280', fontWeight:500 }}>Taxa de conclusão</span>
+                      <span style={{ fontSize:12, fontWeight:700, color:'#111827' }}>{Math.round(attended/totalAppt*100)}%</span>
+                    </div>
+                    <div style={{ height:6, background:'#E2E8F0', borderRadius:9999, overflow:'hidden' }}>
+                      <div style={{ height:'100%', width:Math.round(attended/totalAppt*100)+'%', background:'linear-gradient(90deg,#3B82F6,#10B981)', borderRadius:9999 }} />
+                    </div>
+                    <div style={{ fontSize:10, color:'#9CA3AF', marginTop:4 }}>{attended} de {totalAppt} concluído{attended!==1?'s':''}</div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Base de Pacientes */}
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-4">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-xs font-bold text-slate-700">Base de Pacientes</span>
+                <button onClick={() => onNavigate?.('pacientes')}
+                  style={{ fontSize:11, color:'#2563EB', fontWeight:600, background:'transparent', border:'none', cursor:'pointer', fontFamily:'inherit' }}>
+                  Ver todos →
+                </button>
+              </div>
+              <div className="flex items-end gap-4">
+                <div>
+                  <div className="text-3xl font-extrabold text-slate-900 leading-none">{totalPatients}</div>
+                  <div className="text-[10px] text-slate-400 mt-1">pacientes ativos</div>
+                </div>
+                <div style={{ flex:1 }}>
+                  <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:4 }}>
+                    <span style={{ fontSize:10, color:'#6B7280' }}>Novos esta semana</span>
+                    <span style={{ fontSize:12, fontWeight:700, color:'#2563EB' }}>+{newPtsWeek}</span>
+                  </div>
+                  <div style={{ height:6, background:'#F1F5F9', borderRadius:9999, overflow:'hidden' }}>
+                    <div style={{ height:'100%', background:'#3B82F6', borderRadius:9999, width: totalPatients > 0 ? Math.min(100, Math.round(newPtsWeek/Math.max(totalPatients,1)*100*5))+'%' : '0%' }} />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        {/* ANÁLISE DO PERÍODO (colapsável) */}
+        <div className="bg-white rounded-2xl border border-slate-100 overflow-hidden shadow-sm">
+          <button onClick={() => setShowAnalytics(s => !s)}
+            style={{ width:'100%', padding:'13px 20px', display:'flex', alignItems:'center', justifyContent:'space-between', background:'transparent', border:'none', cursor:'pointer', fontFamily:'inherit', borderBottom:showAnalytics?'1px solid #F1F5F9':'none' }}>
+            <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+              <Activity size={15} color="#2563EB" />
+              <span style={{ fontSize:14, fontWeight:700, color:'#111827' }}>Análise do Período</span>
+              <span style={{ fontSize:11, color:'#9CA3AF' }}>relatórios e estatísticas avançadas</span>
+            </div>
+            <ChevronRight size={14} color="#9CA3AF" style={{ transform:showAnalytics?'rotate(90deg)':'none', transition:'transform 0.2s' }} />
+          </button>
+          {showAnalytics && (
+            <div style={{ padding:'16px 18px', display:'flex', flexDirection:'column', gap:14 }}>
+              {(() => {
+                const PROC_COLORS = ['#F59E0B','#0066D0','#10B981','#7C3AED','#EF4444','#EC4899','#06B6D4'];
+                const anConcluidos  = anAppts.filter(a => a.status === 'concluido').length;
+                const anFaltaram    = anAppts.filter(a => a.status === 'faltou').length;
+                const anConfirmados = anAppts.filter(a => ['confirmado','aguardando','em_atendimento','concluido'].includes(a.status)).length;
+                const anTotalPts    = anPatients.length;
+                const now3 = new Date();
+                let anStart = '';
+                if      (anPeriod === '7dias')  { const d = new Date(now3); d.setDate(d.getDate()-7);  anStart = d.toISOString().split('T')[0]; }
+                else if (anPeriod === '30dias') { const d = new Date(now3); d.setDate(d.getDate()-30); anStart = d.toISOString().split('T')[0]; }
+                else if (anPeriod === 'mes')    anStart = new Date(now3.getFullYear(), now3.getMonth(), 1).toISOString().split('T')[0];
+                else                            anStart = new Date(now3.getFullYear(), 0, 1).toISOString().split('T')[0];
+                const novos       = anPatients.filter(p => ((p as any).created_at??'').slice(0,10) >= anStart).length;
+                const recorrentes = Math.max(0, anTotalPts - novos);
+                const novosPct    = anTotalPts > 0 ? Math.round(novos/anTotalPts*100) : 0;
+                const homens      = anPatients.filter(p => p.gender === 'M').length;
+                const mulheres    = anPatients.filter(p => p.gender === 'F').length;
+                const homensPct   = anTotalPts > 0 ? Math.round(homens/anTotalPts*100) : 0;
+                const mulheresPct = anTotalPts > 0 ? Math.round(mulheres/anTotalPts*100) : 0;
+                const convenioA   = anAppts.filter(a => a.insurance && a.insurance !== 'Particular').length;
+                const particularA = anAppts.length - convenioA;
+                const convPct     = anAppts.length > 0 ? Math.round(convenioA/anAppts.length*100)   : 0;
+                const partPct     = anAppts.length > 0 ? Math.round(particularA/anAppts.length*100) : 0;
+                const PROC_TYPES  = [{value:'consulta',label:'Consulta'},{value:'retorno',label:'Retorno'},{value:'primeira_consulta',label:'1ª Consulta'},{value:'avaliacao',label:'Avaliação'},{value:'exame',label:'Exame'},{value:'procedimento',label:'Procedimento'},{value:'teleconsulta',label:'Teleconsulta'}];
+                const byType      = PROC_TYPES.map(t => ({ label:t.label, count:anAppts.filter(a=>a.type===t.value).length })).filter(t=>t.count>0).sort((a,b)=>b.count-a.count);
+                const totalProcs  = byType.reduce((s,t) => s+t.count, 0);
+                return (
+                  <>
+                    <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' as const }}>
+                      <span style={{ fontSize:13, fontWeight:600, color:'#111827', flex:1 }}>Análise do Período</span>
+                      <span style={{ fontSize:13, color:'#6B7280' }}>Período</span>
+                      <select value={anPeriod} onChange={e => setAnPeriod(e.target.value)}
+                        style={{ height:30, border:'1px solid #E5E7EB', borderRadius:6, padding:'0 8px', fontSize:12, color:'#111827', background:'#fff', fontFamily:'inherit' }}>
+                        <option value="7dias">Últimos 7 dias</option>
+                        <option value="30dias">Últimos 30 dias</option>
+                        <option value="mes">Este mês</option>
+                        <option value="ano">Este ano</option>
+                      </select>
+                      <span style={{ fontSize:13, color:'#6B7280' }}>Profissional</span>
+                      <select value={anProf} onChange={e => setAnProf(e.target.value)}
+                        style={{ height:30, border:'1px solid #E5E7EB', borderRadius:6, padding:'0 8px', fontSize:12, color:'#111827', background:'#fff', fontFamily:'inherit', minWidth:160 }}>
+                        <option value="todos">Todos</option>
+                        {anDoctors.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                      </select>
+                    </div>
+                    <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:12 }}>
+                      {([
+                        { label:'Agendados',   value:anAppts.length, numColor:'#374151', iconBg:'#F3F4F6', iconColor:'#6B7280', icon:'calendar' },
+                        { label:'Confirmados', value:anConfirmados,  numColor:'#0066D0', iconBg:'#EFF6FF', iconColor:'#0066D0', icon:'check' },
+                        { label:'Atendidos',   value:anConcluidos,   numColor:'#10B981', iconBg:'#D1FAE5', iconColor:'#10B981', icon:'check' },
+                        { label:'Faltaram',    value:anFaltaram,     numColor:'#EF4444', iconBg:'#FEE2E2', iconColor:'#EF4444', icon:'bell' },
+                      ] as const).map((k,i)=>(
+                        <Card key={i} style={{ padding:'14px', display:'flex', flexDirection:'column', alignItems:'center', gap:4, textAlign:'center' as const }}>
+                          <div style={{ fontSize:32, fontWeight:700, color:k.numColor, lineHeight:1 }}>{k.value}</div>
+                          <div style={{ fontSize:12, color:'#6B7280' }}>{k.label}</div>
+                          <div style={{ width:32, height:32, borderRadius:8, background:k.iconBg, display:'flex', alignItems:'center', justifyContent:'center', marginTop:2 }}>
+                            <Icon name={k.icon} size={15} color={k.iconColor} />
+                          </div>
+                        </Card>
+                      ))}
+                    </div>
+                    {anLoading ? <Spinner /> : (
+                      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:12 }}>
+                        <Card style={{ padding:'14px 16px' }}>
+                          <div style={{ fontSize:13, fontWeight:600, color:'#0066D0', marginBottom:10 }}>Pacientes</div>
+                          <div style={{ display:'flex', justifyContent:'center', marginBottom:8 }}>
+                            <DonutChart pct={novosPct} size={108} stroke={18} color="#60A5FA" bg="#BAE6FD">
+                              <div style={{ textAlign:'center' as const }}>
+                                <div style={{ fontSize:20, fontWeight:700, color:'#111827' }}>{anTotalPts}</div>
+                                <div style={{ fontSize:10, color:'#9CA3AF' }}>Pacientes</div>
+                              </div>
+                            </DonutChart>
+                          </div>
+                          <div style={{ display:'flex', gap:8, justifyContent:'center', marginBottom:10 }}>
+                            {[{label:'Novos',color:'#60A5FA',val:novos},{label:'Recorren...',color:'#BAE6FD',val:recorrentes}].map((l,i)=>(
+                              <div key={i} style={{ display:'flex', alignItems:'center', gap:4, fontSize:11, color:'#6B7280' }}>
+                                <div style={{ width:8, height:8, borderRadius:'50%', background:l.color }} />{l.label} ({l.val})
+                              </div>
+                            ))}
+                          </div>
+                          <div style={{ display:'flex', justifyContent:'space-around' }}>
+                            {[
+                              {label:'Homens',  pct:homensPct,   total:homens,   color:'#0066D0', bg:'#DBEAFE'},
+                              {label:'Mulheres',pct:mulheresPct, total:mulheres, color:'#EC4899', bg:'#FCE7F3'},
+                            ].map((g,i)=>(
+                              <div key={i} style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:3 }}>
+                                <DonutChart pct={g.pct} size={42} stroke={7} color={g.color} bg={g.bg}>
+                                  <span style={{ fontSize:9, fontWeight:700, color:g.color }}>{g.pct}%</span>
+                                </DonutChart>
+                                <div style={{ textAlign:'center' as const }}>
+                                  <div style={{ fontSize:11, fontWeight:600, color:g.color }}>{g.label}</div>
+                                  <div style={{ fontSize:10, color:'#9CA3AF' }}>Total: {g.total}</div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </Card>
+                        <Card style={{ padding:'14px 16px' }}>
+                          <div style={{ fontSize:13, fontWeight:600, color:'#0066D0', marginBottom:10 }}>Procedimentos realizados</div>
+                          <div style={{ display:'flex', justifyContent:'center', marginBottom:10 }}>
+                            <DonutChart pct={totalProcs>0?100:0} size={108} stroke={18} color={PROC_COLORS[0]} bg="#E5E7EB">
+                              <div style={{ textAlign:'center' as const }}>
+                                <div style={{ fontSize:26, fontWeight:700, color:'#111827' }}>{totalProcs}</div>
+                                <div style={{ fontSize:10, color:'#9CA3AF' }}>Procedimentos</div>
+                              </div>
+                            </DonutChart>
+                          </div>
+                          {byType.length===0
+                            ? <div style={{ textAlign:'center' as const, fontSize:11, color:'#9CA3AF' }}>Sem dados</div>
+                            : <div style={{ display:'flex', flexDirection:'column', gap:5 }}>
+                                {byType.slice(0,4).map((t,i)=>(
+                                  <div key={i} style={{ display:'flex', alignItems:'center', gap:5 }}>
+                                    <div style={{ width:8, height:8, borderRadius:'50%', background:PROC_COLORS[i%PROC_COLORS.length], flexShrink:0 }} />
+                                    <span style={{ flex:1, fontSize:11, color:'#6B7280', overflow:'hidden', whiteSpace:'nowrap', textOverflow:'ellipsis' }}>{t.label}</span>
+                                    <span style={{ fontSize:11, fontWeight:600, color:'#111827' }}>{t.count}</span>
+                                  </div>
+                                ))}
+                              </div>
+                          }
+                        </Card>
+                        <Card style={{ padding:'14px 16px' }}>
+                          <div style={{ fontSize:13, fontWeight:600, color:'#0066D0', marginBottom:10 }}>Pacientes x Convênio</div>
+                          <div style={{ display:'flex', justifyContent:'center', marginBottom:10 }}>
+                            <DonutChart pct={partPct} size={108} stroke={18} color="#60A5FA" bg="#FDE68A">
+                              <div style={{ textAlign:'center' as const }}>
+                                <div style={{ fontSize:20, fontWeight:700, color:'#111827' }}>{anAppts.length}</div>
+                                <div style={{ fontSize:10, color:'#9CA3AF' }}>Pacientes</div>
+                              </div>
+                            </DonutChart>
+                          </div>
+                          <div style={{ display:'flex', flexDirection:'column', gap:7 }}>
+                            {[
+                              {label:'Particular',count:particularA,pct:partPct,color:'#60A5FA'},
+                              {label:'Convênio',  count:convenioA,  pct:convPct, color:'#F59E0B'},
+                            ].map((row,i)=>(
+                              <div key={i} style={{ display:'flex', alignItems:'center', gap:6 }}>
+                                <div style={{ width:8, height:8, borderRadius:'50%', background:row.color, flexShrink:0 }} />
+                                <span style={{ flex:1, fontSize:12, color:'#6B7280' }}>{row.label}</span>
+                                <span style={{ fontSize:12, fontWeight:700, color:'#111827' }}>{row.count}</span>
+                                <span style={{ fontSize:11, color:'#9CA3AF', minWidth:28, textAlign:'right' as const }}>{row.pct}%</span>
+                              </div>
+                            ))}
+                          </div>
+                        </Card>
+                        <Card style={{ padding:'14px 16px' }}>
+                          <div style={{ fontSize:13, fontWeight:600, color:'#0066D0', marginBottom:10 }}>Duração do atendimento</div>
+                          <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:8, marginBottom:14 }}>
+                            <Icon name="clock" size={22} color="#6B7280" />
+                            <span style={{ fontSize:28, fontWeight:700, color:'#111827', fontStyle:'italic' }}>
+                              {anAvgDur>0?`${anAvgDur}min`:'—'}
+                            </span>
+                          </div>
+                          <div style={{ fontSize:12, fontWeight:600, color:'#6B7280', marginBottom:8 }}>Por tipo de consulta</div>
+                          {byType.length===0
+                            ? <div style={{ textAlign:'center' as const, fontSize:11, color:'#9CA3AF' }}>Sem dados</div>
+                            : (() => {
+                                const TYPE_DUR2: Record<string,number> = { consulta:30, retorno:15, primeira_consulta:45, avaliacao:30, exame:60, procedimento:45, teleconsulta:20 };
+                                const TYPE_VAL  = PROC_TYPES.map(t => ({
+                                  label: t.label,
+                                  dur:   TYPE_DUR2[t.value] ?? 30,
+                                  count: anAppts.filter(a => a.type === t.value).length,
+                                })).filter(t => t.count > 0).slice(0,4);
+                                return (
+                                  <div style={{ display:'flex', flexDirection:'column', gap:5 }}>
+                                    {TYPE_VAL.map((t,i) => (
+                                      <div key={i} style={{ display:'flex', alignItems:'center', gap:6, fontSize:11 }}>
+                                        <div style={{ width:8, height:8, borderRadius:'50%', background:PROC_COLORS[i%PROC_COLORS.length], flexShrink:0 }} />
+                                        <span style={{ flex:1, color:'#6B7280', overflow:'hidden', whiteSpace:'nowrap', textOverflow:'ellipsis' }}>{t.label}</span>
+                                        <span style={{ color:'#111827', fontWeight:600, minWidth:38, textAlign:'right' as const }}>{t.dur}min</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                );
+                              })()
+                          }
+                        </Card>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
+            </div>
+          )}
+        </div>
+
+      </div>
     </div>
   );
 }
@@ -975,7 +1486,7 @@ function shiftDays(dateIso: string, n: number): string {
 ───────────────────────────────────────── */
 const MONTH_NAMES_PT = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho',
                         'Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
-const DOW_PT = ['Se','Te','Qu','Qu','Se','Sá','Do'];
+const DOW_PT = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
 
 function MiniCalendar({ selected, onSelect, onClose }: {
   selected: string;
@@ -1104,40 +1615,86 @@ function DroppableSlot({ id, isWeekend, isHoliday, children }: {
   );
 }
 
-function DraggableAppt({ appt }: { appt: Appointment }) {
+// APPT_STATUS_META removido — usar STATUS_META importado de @/components/calendar/utils
+
+function DraggableAppt({ appt, onDetail }: { appt: Appointment; onDetail?: () => void }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: appt.id,
     data: { appt },
   });
-  const color = STATUS_COLORS[appt.status]?.color ?? '#00BCD4';
-  const bg    = STATUS_COLORS[appt.status]?.bg    ?? '#B2EBF2';
+  const color   = STATUS_COLORS[appt.status]?.color ?? '#00BCD4';
+  const bg      = STATUS_COLORS[appt.status]?.bg    ?? '#B2EBF2';
+  const moveRef = React.useRef(false);
+  const [tooltipRect, setTooltipRect] = useState<DOMRect | null>(null);
+  const sMeta = STATUS_META[appt.status];
+
+  const handleMouseEnter = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    setTooltipRect(e.currentTarget.getBoundingClientRect());
+  }, []);
+  const handleMouseLeave = useCallback(() => setTooltipRect(null), []);
+
+  const showTooltip = !!tooltipRect && !isDragging && !!sMeta;
+
   return (
-    <div
-      ref={setNodeRef}
-      {...listeners}
-      {...attributes}
-      style={{
-        background: bg,
-        borderLeft: `3px solid ${color}`,
-        borderRadius: 3,
-        padding: '3px 6px',
-        fontSize: 10,
-        color,
-        lineHeight: 1.3,
-        cursor: isDragging ? 'grabbing' : 'grab',
-        opacity: isDragging ? 0.35 : 1,
-        transform: DndCSS.Translate.toString(transform),
-        position: 'relative',
-        zIndex: isDragging ? 999 : 1,
-        userSelect: 'none',
-        marginBottom: 1,
-      }}
-    >
-      <div style={{ fontWeight: 700 }}>{appt.start_time?.slice(0, 5)}–{appt.end_time?.slice(0, 5)}</div>
-      <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        {appt.patients?.name ?? 'Paciente'}
+    <>
+      <div
+        ref={setNodeRef}
+        {...listeners}
+        {...attributes}
+        onPointerDown={() => { moveRef.current = false; }}
+        onPointerMove={() => { moveRef.current = true; }}
+        onPointerUp={() => { if (!moveRef.current && !isDragging) onDetail?.(); }}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
+        style={{
+          background: bg,
+          borderLeft: `3px solid ${color}`,
+          borderRadius: 4,
+          padding: '4px 7px',
+          fontSize: 10,
+          color,
+          lineHeight: 1.35,
+          cursor: isDragging ? 'grabbing' : 'pointer',
+          opacity: isDragging ? 0.35 : 1,
+          transform: DndCSS.Translate.toString(transform),
+          position: 'relative',
+          zIndex: isDragging ? 999 : 1,
+          userSelect: 'none',
+          marginBottom: 2,
+          transition: 'box-shadow .1s',
+          boxShadow: showTooltip ? '0 2px 8px rgba(0,0,0,.12)' : 'none',
+        }}
+      >
+        <div style={{ fontWeight: 700 }}>{appt.start_time?.slice(0, 5)}–{appt.end_time?.slice(0, 5)}</div>
+        <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {appt.patients?.name ?? 'Paciente'}
+        </div>
       </div>
-    </div>
+
+      {showTooltip && sMeta && tooltipRect && ReactDOM.createPortal(
+        <div style={{
+          position: 'fixed',
+          left: tooltipRect.right + 8,
+          top: Math.max(4, tooltipRect.top + tooltipRect.height / 2 - 30),
+          zIndex: 99999,
+          pointerEvents: 'none',
+          background: sMeta.bg,
+          border: `1.5px solid ${sMeta.border}`,
+          borderRadius: 8,
+          padding: '8px 12px',
+          boxShadow: '0 4px 20px rgba(0,0,0,.14)',
+          minWidth: 170,
+          maxWidth: 240,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 4 }}>
+            <span style={{ width: 9, height: 9, borderRadius: '50%', background: sMeta.dot, display: 'inline-block', flexShrink: 0 }} />
+            <span style={{ fontWeight: 700, fontSize: 13, color: sMeta.textColor }}>{sMeta.label}</span>
+          </div>
+          <div style={{ fontSize: 12, color: sMeta.textColor, opacity: 0.8, lineHeight: 1.4 }}>{sMeta.desc}</div>
+        </div>,
+        document.body,
+      )}
+    </>
   );
 }
 
@@ -1145,14 +1702,20 @@ function DraggableAppt({ appt }: { appt: Appointment }) {
    AGENDA SCREEN
 ───────────────────────────────────────── */
 function Agenda() {
+  const doctor  = React.useContext(DoctorContext);
+  const access  = useAllowedDoctors();
   const [view,         setView]         = useState<'DIA' | 'SEMANA'>('SEMANA');
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [loading,      setLoading]      = useState(true);
   const [showAddAppt,  setShowAddAppt]  = useState(false);
   const [showWaitlist, setShowWaitlist] = useState(false);
-  const [activeAppt,   setActiveAppt]   = useState<Appointment | null>(null);
-  const [refDate,      setRefDate]      = useState(todayISO());
-  const [showPicker,   setShowPicker]   = useState(false);
+  const [activeAppt,         setActiveAppt]         = useState<Appointment | null>(null);
+  const [refDate,            setRefDate]            = useState(todayISO());
+  const [showPicker,         setShowPicker]         = useState(false);
+  const [detailAppt,         setDetailAppt]         = useState<Appointment | null>(null);
+  const [atendimentoAppt,    setAtendimentoAppt]    = useState<Appointment | null>(null);
+  const scrollRef                                    = useRef<HTMLDivElement>(null);
+  const [nowTop,             setNowTop]             = useState<number | null>(null);
 
   const today    = todayISO();
   const wStart   = weekStartFor(refDate);
@@ -1175,15 +1738,49 @@ function Agenda() {
     ? allDays
     : (allDays.find(d => d.iso === refDate) ? allDays.filter(d => d.iso === refDate) : [allDays[0]]);
 
-  const loadAppointments = () => {
+  const loadAppointments = (forceIds?: string[]) => {
     setLoading(true);
-    supabase.from('appointments')
-      .select('*, patients(id,name)')
-      .gte('date', wStart).lte('date', wEnd).order('start_time')
-      .then(({ data }) => { setAppointments((data as Appointment[]) ?? []); setLoading(false); });
+    const ids = forceIds ?? access.allowedDoctorIds;
+    let q = supabase.from('appointments')
+      .select('*, patients(id,name,phone,birth_date,insurance)')
+      .gte('date', wStart).lte('date', wEnd).order('start_time').limit(200);
+    // Aplica filtro por médico só quando os IDs já foram carregados
+    if (ids.length > 0) {
+      q = applyDoctorFilter(q, ids);
+    }
+    q.then(({ data }) => { setAppointments((data as Appointment[]) ?? []); setLoading(false); });
   };
+
+  // Dispara imediatamente na montagem (sem esperar access)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { loadAppointments(); }, [wStart]);
+
+  // Quando access terminar de carregar, re-fetch com filtro correto se necessário
+  useEffect(() => {
+    if (!access.loading) loadAppointments(access.allowedDoctorIds);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [access.loading]);
+
+  /* ── Current time indicator ── */
+  useEffect(() => {
+    function refresh() {
+      const now = new Date();
+      const m = now.getHours() * 60 + now.getMinutes();
+      if (m < 7 * 60 || m > 21 * 60 || !scrollRef.current) { setNowTop(null); return; }
+      const todayVisible = today >= wStart && today <= wEnd &&
+        (view === 'SEMANA' || refDate === today);
+      if (!todayVisible) { setNowTop(null); return; }
+      const si = Math.floor((m - 7 * 60) / 30);
+      const fr = ((m - 7 * 60) % 30) / 30;
+      const el = document.getElementById(`tl-${AGENDA_TIMES[si].replace(':', '')}`);
+      if (!el) return;
+      const cr = scrollRef.current.getBoundingClientRect();
+      const er = el.getBoundingClientRect();
+      setNowTop(er.top - cr.top + scrollRef.current.scrollTop + er.height * fr);
+    }
+    if (!loading) { refresh(); const id = setInterval(refresh, 30_000); return () => clearInterval(id); }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, wStart, wEnd, view, refDate]);
 
   /* ── DnD sensors ── */
   const sensors = useSensors(
@@ -1231,91 +1828,154 @@ function Agenda() {
 
   const cols = `52px repeat(${agendaDays.length}, 1fr)`;
 
+  // Computed for the header
+  const todayAppts  = appointments.filter(a => a.date === today);
+  const viewDay     = view === 'DIA' ? refDate : null;
+  const viewAppts   = viewDay ? appointments.filter(a => a.date === viewDay) : [];
+  const isViewToday = viewDay === today;
+
+  const todayLabel = new Date(today + 'T12:00:00').toLocaleDateString('pt-BR', {
+    weekday: 'long', day: 'numeric', month: 'long',
+  });
+
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
-      {/* ── Toolbar ── */}
-      <div style={{ padding: '12px 20px', background: '#fff', borderBottom: '1px solid #E5E7EB', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
-        <div style={{ fontSize: 16, fontWeight: 600, color: '#0066D0' }}>guilherme teixeira</div>
-        <div style={{ display: 'flex', gap: 6 }}>
-          {[
-            { icon: 'plus',    label: 'Novo\nAgendamento', action: () => setShowAddAppt(true) },
-            { icon: 'list',    label: 'Lista de\nEspera',  action: () => setShowWaitlist(true) },
-            { icon: 'printer', label: 'Imprimir\nAgenda',  action: () => window.print() },
-          ].map((a, i) => (
-            <button key={i} onClick={a.action} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, padding: '5px 10px', background: 'none', border: '1px solid #E5E7EB', borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit' }}>
-              <Icon name={a.icon} size={13} color="#6B7280" />
-              <span style={{ fontSize: 10, color: '#6B7280', whiteSpace: 'pre-line', textAlign: 'center', lineHeight: 1.2 }}>{a.label}</span>
+      {/* ── Header: Hoje em destaque + ações ── */}
+      <div style={{ background: '#fff', borderBottom: '1px solid #E5E7EB', flexShrink: 0 }}>
+
+        {/* Top row */}
+        <div style={{ padding: '14px 20px 10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            {/* Título + data */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{ fontSize: 18, fontWeight: 700, color: '#111827', textTransform: 'capitalize' }}>
+                {isViewToday ? 'Agenda de Hoje' : view === 'DIA'
+                  ? new Date(refDate + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })
+                  : `Semana ${allDays[0].date} – ${allDays[6].date}`}
+              </div>
+              {isViewToday && (
+                <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 20,
+                  background: '#EFF6FF', color: '#0066D0' }}>
+                  {todayLabel}
+                </span>
+              )}
+            </div>
+
+            {/* Appointment count strip */}
+            {view === 'DIA' && (
+              <div style={{ display: 'flex', gap: 12, marginTop: 6 }}>
+                {[
+                  { label: 'Total',     val: viewAppts.length,                                        color: '#374151' },
+                  { label: 'Aguardando',val: viewAppts.filter(a => a.status === 'aguardando').length,  color: '#F59E0B' },
+                  { label: 'Concluído', val: viewAppts.filter(a => a.status === 'concluido').length,   color: '#10B981' },
+                  { label: 'Cancelado', val: viewAppts.filter(a => a.status === 'cancelado').length,   color: '#EF4444' },
+                ].filter(s => s.label === 'Total' || s.val > 0).map(s => (
+                  <div key={s.label} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{ width: 7, height: 7, borderRadius: '50%', background: s.color, display: 'inline-block' }} />
+                    <span style={{ fontSize: 12, color: '#6B7280' }}>
+                      <strong style={{ color: s.color }}>{s.val}</strong> {s.label}
+                    </span>
+                  </div>
+                ))}
+                {viewAppts.length === 0 && (
+                  <span style={{ fontSize: 12, color: '#9CA3AF' }}>Nenhum agendamento · dia livre</span>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Action buttons */}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <button onClick={() => setShowWaitlist(true)} style={{
+              height: 34, padding: '0 12px', border: '1px solid #E5E7EB', borderRadius: 7,
+              background: '#fff', fontSize: 12, color: '#374151',
+              cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 5,
+            }}>
+              <Icon name="list" size={13} color="#6B7280" /> Lista de espera
             </button>
-          ))}
+            <button onClick={() => window.print()} style={{
+              height: 34, padding: '0 12px', border: '1px solid #E5E7EB', borderRadius: 7,
+              background: '#fff', fontSize: 12, color: '#374151',
+              cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 5,
+            }}>
+              <Icon name="printer" size={13} color="#6B7280" /> Imprimir
+            </button>
+            <button onClick={() => setShowAddAppt(true)} style={{
+              height: 34, padding: '0 16px', background: '#0066D0', color: '#fff',
+              border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 700,
+              cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 6,
+            }}>
+              <Icon name="plus" size={14} color="#fff" /> Novo Agendamento
+            </button>
+          </div>
+        </div>
+
+        {/* Navigation row */}
+        <div style={{ padding: '0 20px 10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, position: 'relative' }}>
+            <button onClick={() => setRefDate(d => view === 'SEMANA' ? shiftDays(d, -7) : shiftDays(d, -1))} style={{
+              height: 28, width: 28, border: '1px solid #E5E7EB', borderRadius: 6,
+              background: '#fff', fontSize: 16, cursor: 'pointer', lineHeight: 1,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#374151',
+            }}>‹</button>
+
+            <button onClick={() => setRefDate(todayISO())} style={{
+              height: 28, padding: '0 10px', border: `1px solid ${refDate === today ? '#0066D0' : '#E5E7EB'}`,
+              borderRadius: 6, background: refDate === today ? '#EFF6FF' : '#fff',
+              fontSize: 11, cursor: 'pointer', fontFamily: 'inherit',
+              color: refDate === today ? '#0066D0' : '#374151', fontWeight: refDate === today ? 600 : 400,
+            }}>Hoje</button>
+
+            <button onClick={() => setRefDate(d => view === 'SEMANA' ? shiftDays(d, 7) : shiftDays(d, 1))} style={{
+              height: 28, width: 28, border: '1px solid #E5E7EB', borderRadius: 6,
+              background: '#fff', fontSize: 16, cursor: 'pointer', lineHeight: 1,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#374151',
+            }}>›</button>
+
+            <button onClick={() => setShowPicker(p => !p)} style={{
+              height: 28, padding: '0 10px', border: '1px solid #E5E7EB', borderRadius: 6,
+              background: showPicker ? '#EFF6FF' : '#fff', fontSize: 12, cursor: 'pointer',
+              fontFamily: 'inherit', color: showPicker ? '#0066D0' : '#374151', fontWeight: 500,
+              display: 'flex', alignItems: 'center', gap: 5,
+            }}>
+              <span>
+                {view === 'SEMANA'
+                  ? `${allDays[0].date} – ${allDays[6].date}`
+                  : (allDays.find(d => d.iso === refDate)?.date ?? allDays[0].date)}
+              </span>
+              <span style={{ fontSize: 13 }}>📅</span>
+            </button>
+
+            {showPicker && (
+              <MiniCalendar
+                selected={refDate}
+                onSelect={d => { setRefDate(d); setShowPicker(false); }}
+                onClose={() => setShowPicker(false)}
+              />
+            )}
+          </div>
+
+          <div style={{ display: 'flex', background: '#F3F4F6', borderRadius: 7, padding: 2 }}>
+            {(['DIA', 'SEMANA'] as const).map(v => (
+              <button key={v} onClick={() => setView(v)} style={{
+                height: 26, padding: '0 14px', border: 'none', borderRadius: 5,
+                background: view === v ? '#fff' : 'transparent',
+                boxShadow: view === v ? '0 1px 3px rgba(0,0,0,.1)' : 'none',
+                fontSize: 12, fontFamily: 'inherit',
+                color:  view === v ? '#0066D0' : '#6B7280',
+                fontWeight: view === v ? 700 : 400,
+                cursor: 'pointer', transition: 'all .15s',
+              }}>{v === 'DIA' ? 'Dia' : 'Semana'}</button>
+            ))}
+          </div>
         </div>
       </div>
 
-      {/* ── Week range + view toggle ── */}
-      <div style={{ padding: '8px 16px', background: '#fff', borderBottom: '1px solid #E5E7EB', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
-
-        {/* Navigation: ‹ Hoje › + date picker */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4, position: 'relative' }}>
-          <button onClick={() => setRefDate(d => view === 'SEMANA' ? shiftDays(d, -7) : shiftDays(d, -1))} style={{
-            height: 28, width: 28, border: '1px solid #E5E7EB', borderRadius: 6,
-            background: '#fff', fontSize: 16, cursor: 'pointer', lineHeight: 1,
-            display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#374151',
-          }}>‹</button>
-
-          <button onClick={() => setRefDate(todayISO())} style={{
-            height: 28, padding: '0 10px', border: '1px solid #E5E7EB', borderRadius: 6,
-            background: '#fff', fontSize: 11, cursor: 'pointer', fontFamily: 'inherit', color: '#374151',
-          }}>Hoje</button>
-
-          <button onClick={() => setRefDate(d => view === 'SEMANA' ? shiftDays(d, 7) : shiftDays(d, 1))} style={{
-            height: 28, width: 28, border: '1px solid #E5E7EB', borderRadius: 6,
-            background: '#fff', fontSize: 16, cursor: 'pointer', lineHeight: 1,
-            display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#374151',
-          }}>›</button>
-
-          {/* Clickable date label — opens mini calendar */}
-          <button onClick={() => setShowPicker(p => !p)} style={{
-            height: 28, padding: '0 10px', border: '1px solid #E5E7EB', borderRadius: 6,
-            background: showPicker ? '#EFF6FF' : '#fff', fontSize: 12, cursor: 'pointer',
-            fontFamily: 'inherit', color: showPicker ? '#0066D0' : '#374151', fontWeight: 500,
-            display: 'flex', alignItems: 'center', gap: 5,
-          }}>
-            <span>
-              {view === 'SEMANA'
-                ? `${allDays[0].date} – ${allDays[6].date}`
-                : (allDays.find(d => d.iso === refDate)?.date ?? allDays[0].date)}
-            </span>
-            <span style={{ fontSize: 13 }}>📅</span>
-          </button>
-
-          {/* Mini-calendar popup */}
-          {showPicker && (
-            <MiniCalendar
-              selected={refDate}
-              onSelect={d => { setRefDate(d); setShowPicker(false); }}
-              onClose={() => setShowPicker(false)}
-            />
-          )}
-        </div>
-
-        {/* Day / Semana toggle */}
-        <div style={{ display: 'flex' }}>
-          {(['DIA', 'SEMANA'] as const).map(v => (
-            <button key={v} onClick={() => setView(v)} style={{
-              height: 28, padding: '0 12px', border: '1px solid #E5E7EB', fontSize: 12, fontFamily: 'inherit',
-              background: view === v ? '#EFF6FF' : '#fff',
-              color:      view === v ? '#0066D0' : '#6B7280',
-              fontWeight: view === v ? 600 : 400,
-              cursor: 'pointer',
-            }}>{v}</button>
-          ))}
-        </div>
-      </div>
-
-      {/* ── Grid ── */}
-      {loading ? <Spinner /> : (
+      {/* ── Grid — renderiza sempre; appointments chegam depois ── */}
+      {(
         <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-          <div style={{ flex: 1, overflowY: 'auto', overflowX: 'auto' }}>
+          <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', overflowX: 'auto', position: 'relative' }}>
             <div style={{ display: 'grid', gridTemplateColumns: cols, minWidth: 600 }}>
 
               {/* Header row */}
@@ -1352,7 +2012,7 @@ function Agenda() {
               {AGENDA_TIMES.map((t, ti) => (
                 <React.Fragment key={ti}>
                   {/* Time label */}
-                  <div style={{
+                  <div id={`tl-${t.replace(':', '')}`} style={{
                     borderRight: '1px solid #E5E7EB', borderBottom: '1px solid #F3F4F6',
                     padding: '2px 6px 2px 0', fontSize: 10, color: '#9CA3AF', textAlign: 'right',
                     background: '#FAFAFA', userSelect: 'none',
@@ -1362,12 +2022,17 @@ function Agenda() {
 
                   {/* Droppable cell per day */}
                   {agendaDays.map((d, di) => {
+                    const normTime = (s?: string) => {
+                      if (!s) return '';
+                      const [h, m] = s.split(':').map(Number);
+                      return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+                    };
                     const slotAppts = appointments.filter(
-                      a => a.date === d.iso && a.start_time?.slice(0, 5) === t
+                      a => a.date === d.iso && normTime(a.start_time) === t
                     );
                     return (
                       <DroppableSlot key={di} id={`${d.iso}__${t}`} isWeekend={d.weekend} isHoliday={!!holidays[d.iso]}>
-                        {slotAppts.map(a => <DraggableAppt key={a.id} appt={a} />)}
+                        {slotAppts.map(a => <DraggableAppt key={a.id} appt={a} onDetail={() => setDetailAppt(a)} />)}
                       </DroppableSlot>
                     );
                   })}
@@ -1375,6 +2040,28 @@ function Agenda() {
               ))}
 
             </div>
+
+            {/* ── Current time indicator — linha vermelha de ponta a ponta ── */}
+            {nowTop !== null && (
+              <div style={{
+                position: 'absolute',
+                top: nowTop,
+                left: 0,
+                right: 0,
+                pointerEvents: 'none',
+                zIndex: 20,
+                display: 'flex',
+                alignItems: 'center',
+              }}>
+                <div style={{ width: 52, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', paddingRight: 2 }}>
+                  <div style={{ fontSize: 9, fontWeight: 700, color: '#EF4444', background: '#FEE2E2', borderRadius: 3, padding: '0 3px', lineHeight: '14px' }}>
+                    {new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                  </div>
+                </div>
+                <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#EF4444', flexShrink: 0, marginLeft: -4 }} />
+                <div style={{ flex: 1, height: 2, background: '#EF4444' }} />
+              </div>
+            )}
           </div>
 
           {/* Ghost shown while dragging */}
@@ -1396,8 +2083,43 @@ function Agenda() {
         </DndContext>
       )}
 
-      {showAddAppt  && <AddAppointmentModal onClose={() => setShowAddAppt(false)} onSaved={loadAppointments} />}
+      {/* Barra de progresso fina no topo enquanto appointments carregam */}
+      {loading && (
+        <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 2, zIndex: 30, overflow: 'hidden', background: '#E5E7EB' }}>
+          <div style={{ height: '100%', background: '#0066D0', animation: 'agendaLoad 1.2s ease-in-out infinite', width: '40%' }} />
+          <style>{`@keyframes agendaLoad { 0%{transform:translateX(-100%)} 100%{transform:translateX(350%)} }`}</style>
+        </div>
+      )}
+
+      {showAddAppt  && <AddAppointmentModal onClose={() => setShowAddAppt(false)} onSaved={() => { setShowAddAppt(false); loadAppointments(); }} />}
       {showWaitlist && <WaitlistModal onClose={() => setShowWaitlist(false)} />}
+
+      {detailAppt && (
+        <AppointmentDetailModal
+          appt={detailAppt}
+          onClose={() => setDetailAppt(null)}
+          onStatusChange={(id, status) => {
+            setAppointments(prev => prev.map(a => a.id === id ? { ...a, status } : a));
+            setDetailAppt(prev => prev ? { ...prev, status } : prev);
+          }}
+          onStartAtendimento={(appt) => {
+            setDetailAppt(null);
+            setAtendimentoAppt({ ...appt, status: 'em_atendimento' });
+            setAppointments(prev => prev.map(a => a.id === appt.id ? { ...a, status: 'em_atendimento' } : a));
+            supabase.from('appointments').update({ status: 'em_atendimento' }).eq('id', appt.id);
+          }}
+        />
+      )}
+
+      {atendimentoAppt && (
+        <EHRAtendimento
+          appt={atendimentoAppt}
+          onClose={() => {
+            setAtendimentoAppt(null);
+            loadAppointments();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -1410,6 +2132,13 @@ function Pacientes({ onNavigateProntuario }: { onNavigateProntuario?: (patientId
   const [search,      setSearch]      = useState('');
   const [loading,     setLoading]     = useState(true);
   const [showAddPt,   setShowAddPt]   = useState(false);
+  const [hoveredPt,   setHoveredPt]   = useState<string | null>(null);
+  const [agendarPt,   setAgendarPt]   = useState<Patient | null>(null);
+  const [editPt,      setEditPt]      = useState<Patient | null>(null);
+
+  const reloadPatients = () =>
+    supabase.from('patients').select('*').eq('active', true).order('name')
+      .then(({ data }) => setPatients((data as Patient[]) ?? []));
 
   useEffect(() => {
     supabase.from('patients').select('*').eq('active', true).order('name')
@@ -1424,6 +2153,13 @@ function Pacientes({ onNavigateProntuario }: { onNavigateProntuario?: (patientId
 
   const COLORS = ['#DBEAFE','#FEF3C7','#F0FDFA','#F3E8FF','#FEE2E2','#D1FAE5'];
   const TCOLORS= ['#0066D0','#92400E','#0F766E','#7C3AED','#991B1B','#065F46'];
+
+  const iconBtn = (color: string): CSSProperties => ({
+    width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center',
+    background: 'none', border: `1px solid ${color}`, borderRadius: 5,
+    cursor: 'pointer', color, fontSize: 11, fontWeight: 600, fontFamily: 'inherit',
+    padding: 0, flexShrink: 0,
+  });
 
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: '20px 22px', background: '#F9FAFB', display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -1454,31 +2190,81 @@ function Pacientes({ onNavigateProntuario }: { onNavigateProntuario?: (patientId
             <tbody>
               {filtered.length === 0
                 ? <tr><td colSpan={5} style={{ textAlign: 'center', padding: '32px 0', color: '#9CA3AF' }}>Nenhum paciente encontrado</td></tr>
-                : filtered.map((p, i) => (
-                  <tr key={p.id} style={{ borderBottom: '1px solid #F3F4F6' }}>
-                    <td style={{ padding: '10px 14px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                        <div style={{ width: 34, height: 34, borderRadius: '50%', background: COLORS[i % COLORS.length], color: TCOLORS[i % TCOLORS.length], display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, flexShrink: 0 }}>{initials(p.name)}</div>
-                        <div>
-                          <div style={{ fontWeight: 600, color: '#111827' }}>{p.name}</div>
-                          <div style={{ fontSize: 11, color: '#9CA3AF' }}>{p.email}</div>
+                : filtered.map((p, i) => {
+                  const isHov = hoveredPt === p.id;
+                  return (
+                    <tr key={p.id}
+                      onMouseEnter={() => setHoveredPt(p.id)}
+                      onMouseLeave={() => setHoveredPt(null)}
+                      style={{ borderBottom: '1px solid #F3F4F6', background: isHov ? '#F8FAFF' : 'transparent', transition: 'background .1s', position: 'relative' }}>
+                      <td style={{ padding: '10px 14px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, position: 'relative' }}>
+                          <div style={{ width: 34, height: 34, borderRadius: '50%', background: COLORS[i % COLORS.length], color: TCOLORS[i % TCOLORS.length], display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, flexShrink: 0 }}>{initials(p.name)}</div>
+                          <div>
+                            <div style={{ fontWeight: 600, color: '#111827' }}>{p.name}</div>
+                            <div style={{ fontSize: 11, color: '#9CA3AF' }}>{p.email}</div>
+                          </div>
+                          {/* Hover popover */}
+                          {isHov && (
+                            <div style={{
+                              position: 'absolute', left: 0, top: '100%', marginTop: 4, zIndex: 50,
+                              background: '#fff', borderRadius: 8, boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
+                              border: '1px solid #E5E7EB', padding: '10px 14px', minWidth: 220, pointerEvents: 'none',
+                            }}>
+                              <div style={{ fontWeight: 700, fontSize: 13, color: '#111827', marginBottom: 6 }}>{p.name}</div>
+                              {p.birth_date && <div style={{ fontSize: 12, color: '#6B7280', marginBottom: 2 }}>🎂 {new Date(p.birth_date + 'T12:00:00').toLocaleDateString('pt-BR')}</div>}
+                              {p.phone      && <div style={{ fontSize: 12, color: '#6B7280', marginBottom: 2 }}>📱 {p.phone}</div>}
+                              {p.email      && <div style={{ fontSize: 12, color: '#6B7280', marginBottom: 2 }}>✉️ {p.email}</div>}
+                              {p.insurance  && <div style={{ fontSize: 12, color: '#6B7280', marginBottom: 2 }}>🏥 {p.insurance}</div>}
+                              {p.city       && <div style={{ fontSize: 12, color: '#6B7280' }}>📍 {p.city}{p.state ? ` — ${p.state}` : ''}</div>}
+                            </div>
+                          )}
                         </div>
-                      </div>
-                    </td>
-                    <td style={{ padding: '10px 14px', color: '#374151' }}>{p.phone ?? '—'}</td>
-                    <td style={{ padding: '10px 14px', color: '#374151' }}>{p.birth_date ? new Date(p.birth_date + 'T12:00:00').toLocaleDateString('pt-BR') : '—'}</td>
-                    <td style={{ padding: '10px 14px' }}><Badge variant="blue">{p.insurance ?? 'Particular'}</Badge></td>
-                    <td style={{ padding: '10px 14px' }}>
-                      <button onClick={() => onNavigateProntuario?.(p.id)} style={{ height: 28, padding: '0 10px', background: 'none', border: '1px solid #E5E7EB', borderRadius: 5, fontSize: 12, color: '#374151', cursor: 'pointer', fontFamily: 'inherit' }}>Ver prontuário</button>
-                    </td>
-                  </tr>
-                ))
+                      </td>
+                      <td style={{ padding: '10px 14px', color: '#374151' }}>{p.phone ?? '—'}</td>
+                      <td style={{ padding: '10px 14px', color: '#374151' }}>{p.birth_date ? new Date(p.birth_date + 'T12:00:00').toLocaleDateString('pt-BR') : '—'}</td>
+                      <td style={{ padding: '10px 14px' }}><Badge variant="blue">{p.insurance ?? 'Particular'}</Badge></td>
+                      <td style={{ padding: '10px 14px', width: 120, minWidth: 120, maxWidth: 120 }}>
+                        <div style={{ display: 'flex', gap: 5, opacity: isHov ? 1 : 0, pointerEvents: isHov ? 'auto' : 'none', transition: 'opacity .12s', justifyContent: 'flex-end' }}>
+                          <button title="Prontuário" onClick={() => onNavigateProntuario?.(p.id)} style={iconBtn('#0066D0')}>
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+                          </button>
+                          <button title="Agendar" onClick={() => setAgendarPt(p)} style={iconBtn('#059669')}>
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                          </button>
+                          <button title="Editar" onClick={() => setEditPt(p)} style={iconBtn('#F59E0B')}>
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
               }
             </tbody>
           </table>
         </Card>
       )}
-      {showAddPt && <AddPatientModal onClose={() => { setShowAddPt(false); supabase.from('patients').select('*').eq('active', true).order('name').then(({ data }) => setPatients((data as Patient[]) ?? [])); }} />}
+      {showAddPt && (
+        <AddPatientModal
+          onClose={() => setShowAddPt(false)}
+          onSaved={() => { setShowAddPt(false); reloadPatients(); }}
+        />
+      )}
+      {editPt && (
+        <AddPatientModal
+          patient={editPt}
+          onClose={() => setEditPt(null)}
+          onSaved={() => { setEditPt(null); reloadPatients(); }}
+        />
+      )}
+      {agendarPt && (
+        <AddAppointmentModal
+          initialPatient={agendarPt}
+          onClose={() => setAgendarPt(null)}
+          onSaved={() => setAgendarPt(null)}
+        />
+      )}
     </div>
   );
 }
@@ -1502,6 +2288,7 @@ function calcAgeDetailed(birthDate: string): string {
 }
 
 function Prontuario({ initialPatientId }: { initialPatientId?: string }) {
+  const doctor = React.useContext(DoctorContext);
   const [activeSection, setActiveSection] = useState('historico');
   const [patients, setPatients]           = useState<Patient[]>([]);
   const [selected, setSelected]           = useState<Patient | null>(null);
@@ -1515,19 +2302,104 @@ function Prontuario({ initialPatientId }: { initialPatientId?: string }) {
   const [tags,            setTags]            = useState<{id:string;label:string;color:string}[]>([]);
   const [prescDate,       setPrescDate]       = useState(todayISO());
   const [showPrescDate,   setShowPrescDate]   = useState(true);
-  const [prescModels,     setPrescModels]     = useState<{id:string;name:string;items:{med:string;dose:string;freq:string;dur:string}[]}[]>([]);
+  const [prescModels,     setPrescModels]     = useState<PrescriptionModel[]>([]);
+  const [showModelPicker, setShowModelPicker] = useState(false);
+  const [showAddModel,    setShowAddModel]    = useState(false);
+  const [showManageModels,setShowManageModels]= useState(false);
+  const [newModelName,    setNewModelName]    = useState('');
   const [showCreatePresc, setShowCreatePresc] = useState(false);
-  const [showBanner,      setShowBanner]      = useState(false);
   const [timerSecs,       setTimerSecs]       = useState(0);
   const [timerActive,     setTimerActive]     = useState(false);
   const [showDiags,       setShowDiags]       = useState(true);
   const [filterType,      setFilterType]      = useState('todos');
   const [listView,        setListView]        = useState(!initialPatientId);
   const [search,          setSearch]          = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [openRowMenu,     setOpenRowMenu]     = useState<string | null>(null);
+  const [hoveredRow,      setHoveredRow]      = useState<string | null>(null);
+  const [showSuggestions, setShowSuggestions] = useState(false);
   const [lastConsults,    setLastConsults]    = useState<Record<string,string>>({});
   const [checkedIds,      setCheckedIds]      = useState<string[]>([]);
   const [genderFilter,    setGenderFilter]    = useState('');
   const [showFilterMenu,  setShowFilterMenu]  = useState(false);
+  const [showAddPtInList, setShowAddPtInList] = useState(false);
+  const [showApptModal,   setShowApptModal]   = useState(false);
+  const [apptPatient,     setApptPatient]     = useState<Patient | null>(null);
+  const [listTab,         setListTab]         = useState<'prontuario'|'atendimento'|'relacionamento'|'arquivos'>('prontuario');
+  const [anamEditIdx,     setAnamEditIdx]     = useState<number | null>(null);
+  const [anamEditVal,     setAnamEditVal]     = useState('');
+  const [anamSaving,      setAnamSaving]      = useState(false);
+  const [showAiModal,     setShowAiModal]     = useState(false);
+  const [aiRelato,        setAiRelato]        = useState('');
+  const [aiResult,        setAiResult]        = useState('');
+  const [aiLoading,       setAiLoading]       = useState(false);
+  const [aiSpecialty,     setAiSpecialty]     = useState('Generalista');
+  const [isRecording,     setIsRecording]     = useState(false);
+  const [aiInterim,       setAiInterim]       = useState('');
+  const recognitionRef = React.useRef<any>(null);
+
+  // ── Debounce da busca de prontuários ──
+  useEffect(() => {
+    const id = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(id);
+  }, [search]);
+
+  // ── Atendimento inline SOAP form ──
+  const [atendQueixa,    setAtendQueixa]    = useState('');
+  const [atendEvolucao,  setAtendEvolucao]  = useState('');
+  const [atendDiag,      setAtendDiag]      = useState('');
+  const [atendCid,       setAtendCid]       = useState('');
+  const [atendConduta,   setAtendConduta]   = useState('');
+  const [atendRetorno,   setAtendRetorno]   = useState('');
+  const [atendSaving,    setAtendSaving]    = useState(false);
+  const [atendSaved,     setAtendSaved]     = useState(false);
+
+  // ── Exames section ──
+  const [examLines,      setExamLines]      = useState<string[]>(['']);
+  const [examUrgency,    setExamUrgency]    = useState('Rotina');
+  const [examSaving,     setExamSaving]     = useState(false);
+  const [examSaved,      setExamSaved]      = useState(false);
+
+  // ── Documentos section ──
+  const [docType,        setDocType]        = useState<'atestado'|'comparecimento'|'encaminhamento'>('atestado');
+  const [atestDias,      setAtestDias]      = useState('1');
+  const [atestMotivo,    setAtestMotivo]    = useState('');
+  const [encamEspec,     setEncamEspec]     = useState('');
+  const [encamMotivo,    setEncamMotivo]    = useState('');
+
+  // ── Model picker with items ──
+  const [pendingModelItems, setPendingModelItems] = useState<{med:string;dose:string;freq:string;dur:string}[]|null>(null);
+
+  const startRecording = () => {
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) { alert('Seu navegador não suporta gravação de voz. Use Chrome ou Edge.'); return; }
+    const rec = new SR();
+    rec.lang = 'pt-BR';
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.onresult = (e: any) => {
+      let interim = '';
+      let final = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript;
+        if (e.results[i].isFinal) final += t + ' ';
+        else interim += t;
+      }
+      if (final) setAiRelato((prev: string) => prev + final);
+      setAiInterim(interim);
+    };
+    rec.onerror = () => { setIsRecording(false); setAiInterim(''); };
+    rec.onend = () => { setIsRecording(false); setAiInterim(''); };
+    recognitionRef.current = rec;
+    rec.start();
+    setIsRecording(true);
+  };
+
+  const stopRecording = () => {
+    recognitionRef.current?.stop();
+    setIsRecording(false);
+    setAiInterim('');
+  };
 
   useEffect(() => {
     if (!timerActive) return;
@@ -1559,12 +2431,22 @@ function Prontuario({ initialPatientId }: { initialPatientId?: string }) {
     { id: 'presc',     label: 'Prescrições' },
   ];
 
+  const extendedSections = [
+    { id: 'historico',   label: 'Histórico de Consulta' },
+    { id: 'acomp',       label: 'Tabela de acompanhamentos' },
+    { id: 'atendimento', label: 'Atendimento' },
+    { id: 'exames',      label: 'Exames e procedimentos' },
+    { id: 'presc',       label: 'Prescrições' },
+    { id: 'documentos',  label: 'Documentos e atestados' },
+    { id: 'imagens',     label: 'Imagens e anexos' },
+  ];
+
   // Patient code (pseudo-code from id)
   const patientCode = (id: string) =>
     String(parseInt(id.replace(/-/g, '').slice(0, 8), 16) % 900000 + 100000);
 
   useEffect(() => {
-    supabase.from('patients').select('*').eq('active', true).order('name')
+    supabase.from('patients').select('*').eq('active', true).order('name').limit(1000)
       .then(({ data }) => {
         const list = (data as Patient[]) ?? [];
         setPatients(list);
@@ -1575,7 +2457,7 @@ function Prontuario({ initialPatientId }: { initialPatientId?: string }) {
         setLoading(false);
       });
     // Load last consultation per patient
-    supabase.from('medical_records').select('patient_id, created_at').order('created_at', { ascending: false })
+    supabase.from('medical_records').select('patient_id, created_at').order('created_at', { ascending: false }).limit(5000)
       .then(({ data }) => {
         const map: Record<string, string> = {};
         for (const r of (data ?? []) as any[]) {
@@ -1587,18 +2469,36 @@ function Prontuario({ initialPatientId }: { initialPatientId?: string }) {
 
   useEffect(() => {
     if (!selected) return;
-    supabase.from('medical_records').select('*').eq('patient_id', selected.id).order('created_at', { ascending: false })
+    supabase.from('medical_records').select('*').eq('patient_id', selected.id).order('created_at', { ascending: false }).limit(200)
       .then(({ data }) => setRecords((data as MedicalRecord[]) ?? []));
-    supabase.from('prescriptions').select('*').eq('patient_id', selected.id).order('created_at', { ascending: false })
+    supabase.from('prescriptions').select('*').eq('patient_id', selected.id).order('created_at', { ascending: false }).limit(200)
       .then(({ data }) => setPrescriptions((data as Prescription[]) ?? []));
     loadTags(selected.id);
   }, [selected]);
 
+  // Carrega modelos de prescrição do médico
+  useEffect(() => {
+    supabase.from('prescription_models').select('*').order('created_at')
+      .then(({ data }) => {
+        if (data) setPrescModels(data.map((m: any) => ({
+          id: m.id, name: m.name,
+          items: Array.isArray(m.items) ? m.items : [],
+        })));
+      });
+  }, []);
+
   if (loading) return <Spinner />;
 
   const anamnesisTitles = ['Antec. clínicos', 'Antec. cirúrgicos', 'Antec. familiares', 'Hábitos', 'Alergias', 'Medicamentos em uso'];
-  const rec0 = records[0];
-  const anamVals = [rec0?.clinical_history, rec0?.surgical_history, rec0?.family_history, rec0?.habits, rec0?.allergies, undefined];
+  const anamKeys       = ['clinical_history', 'surgical_history', 'family_history', 'habits', 'allergies', 'medications'];
+  // rec0 for anamnesis: prefer a dedicated anamnesis record to avoid overwriting consultations
+  const rec0 = records.find(r => (r as any).type === 'anamnesis') ?? records.find(r =>
+    r.clinical_history || r.surgical_history || r.family_history || r.habits || r.allergies || (r as any).medications
+  ) ?? null;
+  const anamVals = [
+    rec0?.clinical_history, rec0?.surgical_history, rec0?.family_history,
+    rec0?.habits, rec0?.allergies, (rec0 as any)?.medications,
+  ];
   const actionBtn: CSSProperties = { display: 'flex', alignItems: 'center', gap: 5, height: 28, padding: '0 10px', background: '#fff', border: '1px solid #E5E7EB', borderRadius: 6, fontSize: 12, color: '#374151', cursor: 'pointer', fontFamily: 'inherit' };
 
   const filteredRecords = records.filter(r => {
@@ -1608,10 +2508,19 @@ function Prontuario({ initialPatientId }: { initialPatientId?: string }) {
     return true;
   });
 
+  // ── Máscara de telefone BR ──
+  function fmtPhone(raw: string | null | undefined): string {
+    if (!raw) return '—';
+    const d = raw.replace(/\D/g, '');
+    if (d.length === 11) return `(${d.slice(0,2)}) ${d.slice(2,7)}-${d.slice(7)}`;
+    if (d.length === 10) return `(${d.slice(0,2)}) ${d.slice(2,6)}-${d.slice(6)}`;
+    return raw;
+  }
+
   const searchedPatients = patients.filter(p => {
-    // Text search
-    if (search.trim()) {
-      const q = search.toLowerCase();
+    // Text search — usa debouncedSearch
+    if (debouncedSearch.trim()) {
+      const q = debouncedSearch.toLowerCase();
       const matchText = p.name.toLowerCase().includes(q) ||
         (p.phone ?? '').includes(q) ||
         ((p as any).cpf ?? '').includes(q) ||
@@ -1632,156 +2541,356 @@ function Prontuario({ initialPatientId }: { initialPatientId?: string }) {
   // ══════════════════════════════════════════
   if (listView) {
     const allChecked = searchedPatients.length > 0 && checkedIds.length === searchedPatients.length;
-    const thStyle: CSSProperties = { padding: '9px 12px', fontSize: 11, fontWeight: 700, color: '#6B7280', textAlign: 'left', background: '#F9FAFB', borderBottom: '1px solid #E5E7EB', whiteSpace: 'nowrap' };
-    const tdStyle: CSSProperties = { padding: '10px 12px', fontSize: 13, color: '#374151', borderBottom: '1px solid #F3F4F6', verticalAlign: 'middle' };
+    const thStyle: CSSProperties = { padding: '9px 12px', fontSize: 11, fontWeight: 700, color: '#6B7280', textAlign: 'left', background: '#F9FAFB', borderBottom: '1px solid #E5E7EB', whiteSpace: 'nowrap', userSelect: 'none' };
+    const tdStyle: CSSProperties = { padding: '11px 12px', fontSize: 13, color: '#374151', borderBottom: '1px solid #F3F4F6', verticalAlign: 'middle' };
+
+    /* ── Helpers ── */
+    const insuranceMeta: Record<string, { bg: string; color: string }> = {
+      'Particular':     { bg: '#F0FDF4', color: '#15803D' },
+      'Unimed':         { bg: '#EFF6FF', color: '#1D4ED8' },
+      'Bradesco Saúde': { bg: '#FEF3C7', color: '#92400E' },
+      'Amil':           { bg: '#FDF4FF', color: '#7E22CE' },
+      'SulAmérica':     { bg: '#FFF7ED', color: '#C2410C' },
+    };
+    const getInsMeta = (ins: string) => insuranceMeta[ins] ?? { bg: '#F3F4F6', color: '#374151' };
+    const avPal      = ['#DBEAFE','#D1FAE5','#FEF3C7','#F3E8FF','#FEE2E2','#CCFBF1'];
+    const avTxt      = ['#1D4ED8','#065F46','#92400E','#6D28D9','#991B1B','#0F766E'];
+    const avColor    = (n: string) => { const i = n.charCodeAt(0) % avPal.length; return { bg: avPal[i], color: avTxt[i] }; };
+
+    /* Age from birth_date */
+    const calcAge = (bd: string) => {
+      const d = new Date(bd + 'T12:00:00'), now = new Date();
+      let a = now.getFullYear() - d.getFullYear();
+      if (now.getMonth() < d.getMonth() || (now.getMonth() === d.getMonth() && now.getDate() < d.getDate())) a--;
+      return a;
+    };
+
+    /* Relative last-visit date with color */
+    const relVisit = (dateStr: string | undefined): { label: string; dotColor: string; textColor: string } => {
+      if (!dateStr) return { label: 'Nunca', dotColor: '#D1D5DB', textColor: '#9CA3AF' };
+      const diff = Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000);
+      if (diff === 0) return { label: 'Hoje',                       dotColor: '#22C55E', textColor: '#15803D' };
+      if (diff <= 7)  return { label: `${diff}d`,                   dotColor: '#22C55E', textColor: '#15803D' };
+      if (diff <= 30) return { label: diff < 14 ? '1sem' : diff < 21 ? '2sem' : '3sem', dotColor: '#F59E0B', textColor: '#92400E' };
+      return { label: `${Math.floor(diff / 30)}m`,                  dotColor: '#EF4444', textColor: '#DC2626' };
+    };
+
+    /* Highlight matched text */
+    const hl = (text: string, q: string): React.ReactNode => {
+      if (!q.trim()) return text;
+      const norm = (s: string) => s.toLowerCase().replace(/[\s.\-()]/g, '');
+      const idx = norm(text).indexOf(norm(q));
+      if (idx < 0) return text;
+      // find actual char positions (approximate — works for names)
+      const lo = text.toLowerCase().indexOf(q.toLowerCase());
+      if (lo < 0) return text;
+      return <>{text.slice(0, lo)}<mark style={{ background: '#FEF9C3', color: '#854D0E', borderRadius: 2, padding: '0 1px', fontWeight: 700 }}>{text.slice(lo, lo + q.length)}</mark>{text.slice(lo + q.length)}</>;
+    };
+
+    /* Active filter chips */
+    const filterChips: { label: string; onRemove: () => void }[] = [];
+    if (genderFilter === 'masculino') filterChips.push({ label: 'Masculino',  onRemove: () => setGenderFilter('') });
+    if (genderFilter === 'feminino')  filterChips.push({ label: 'Feminino',   onRemove: () => setGenderFilter('') });
+    if (genderFilter === 'obito')     filterChips.push({ label: 'Óbitos',     onRemove: () => setGenderFilter('') });
+    if (genderFilter === 'ativo')     filterChips.push({ label: 'Ativos',     onRemove: () => setGenderFilter('') });
+    if (genderFilter === 'inativo')   filterChips.push({ label: 'Inativos',   onRemove: () => setGenderFilter('') });
+    if (debouncedSearch)              filterChips.push({ label: `"${debouncedSearch}"`, onRemove: () => setSearch('') });
+
+    /* Autocomplete suggestions */
+    const suggestions = debouncedSearch.length >= 2
+      ? patients.filter(p => p.name.toLowerCase().includes(debouncedSearch.toLowerCase())).slice(0, 5)
+      : [];
+
+    /* Quick-action btn style */
+    const qaBtn = (color: string): CSSProperties => ({
+      height: 24, padding: '0 8px', border: `1px solid ${color}20`, borderRadius: 4,
+      background: `${color}10`, color, fontSize: 11, fontWeight: 600,
+      cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap',
+    });
 
     return (
       <>
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: '#F5F6F8' }}>
 
-        {/* Header */}
-        <div style={{ padding: '20px 24px 10px', background: '#F5F6F8' }}>
-          <div style={{ fontSize: 22, fontWeight: 700, color: '#111827', marginBottom: 12 }}>Prontuários</div>
+        {/* ── Header ── */}
+        <div style={{ padding: '16px 20px 0', background: '#F5F6F8' }}>
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 20, fontWeight: 700, color: '#111827' }}>Prontuários</div>
+          </div>
 
-          {/* Search bar */}
-          <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-            <input
-              value={search} onChange={e => setSearch(e.target.value)}
-              placeholder="Digite o nome, código, telefone ou CPF..."
-              style={{ width: '100%', height: 40, border: '1px solid #E5E7EB', borderRadius: 7, padding: '0 40px 0 14px', fontSize: 13, color: '#374151', fontFamily: 'inherit', outline: 'none', background: '#fff', boxSizing: 'border-box' }}
-            />
-            <div style={{ position: 'absolute', right: 48, top: '50%', transform: 'translateY(-50%)', height: '60%', width: 1, background: '#E5E7EB' }} />
-            <span style={{ position: 'absolute', right: 14, fontSize: 12, color: '#9CA3AF', whiteSpace: 'nowrap', pointerEvents: 'none' }}>
-              Todos os profissionais ▾
-            </span>
-            <span style={{ position: 'absolute', right: 180, fontSize: 15, color: '#9CA3AF' }}>🔍</span>
+          {/* Search + autocomplete */}
+          <div style={{ position: 'relative' }}>
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+              <span style={{ position: 'absolute', left: 12, fontSize: 14, color: '#9CA3AF', pointerEvents: 'none' }}>🔍</span>
+              <input
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                onFocus={() => setShowSuggestions(true)}
+                onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
+                placeholder="Buscar por nome, código, telefone ou CPF..."
+                style={{ width: '100%', height: 38, border: '1px solid #E5E7EB', borderRadius: 7, padding: '0 42px 0 36px', fontSize: 13, color: '#374151', fontFamily: 'inherit', outline: 'none', background: '#fff', boxSizing: 'border-box' }}
+              />
+              {search && (
+                <button onClick={() => setSearch('')} style={{ position: 'absolute', right: 10, background: 'none', border: 'none', cursor: 'pointer', fontSize: 16, color: '#9CA3AF', lineHeight: 1 }}>×</button>
+              )}
+            </div>
+            {/* Autocomplete dropdown */}
+            {showSuggestions && suggestions.length > 0 && (
+              <div style={{ position: 'absolute', top: 42, left: 0, right: 0, background: '#fff', border: '1px solid #E5E7EB', borderRadius: 7, boxShadow: '0 8px 24px rgba(0,0,0,.1)', zIndex: 150, overflow: 'hidden' }}>
+                {suggestions.map(s => (
+                  <div key={s.id}
+                    onMouseDown={() => { setSelected(s); setListView(false); setActiveSection('historico'); }}
+                    style={{ padding: '9px 14px', fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid #F3F4F6' }}
+                    onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = '#F9FAFB'}
+                    onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = '#fff'}
+                  >
+                    <span style={{ width: 22, height: 22, borderRadius: '50%', background: avColor(s.name).bg, color: avColor(s.name).color, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 700, flexShrink: 0 }}>{initials(s.name)}</span>
+                    <span style={{ fontWeight: 600, color: '#111827' }}>{hl(s.name, debouncedSearch)}</span>
+                    {s.phone && <span style={{ marginLeft: 'auto', fontSize: 11, color: '#9CA3AF' }}>{fmtPhone(s.phone)}</span>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Filter chips strip */}
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 8, flexWrap: 'wrap', minHeight: 28, paddingBottom: 6 }}>
+            {/* Always-visible filter pills */}
+            {[
+              { key: '',          label: 'Todos' },
+              { key: 'ativo',     label: 'Ativos' },
+              { key: 'masculino', label: 'Masc.' },
+              { key: 'feminino',  label: 'Fem.' },
+              { key: 'inativo',   label: 'Inativos' },
+              { key: 'obito',     label: 'Óbito' },
+            ].map(f => {
+              const active = genderFilter === f.key;
+              return (
+                <button key={f.key} onClick={() => setGenderFilter(f.key)} style={{
+                  height: 24, padding: '0 10px', borderRadius: 99, fontSize: 11, fontWeight: active ? 700 : 500,
+                  border: active ? '1.5px solid #0066D0' : '1px solid #E5E7EB',
+                  background: active ? '#EFF6FF' : '#fff',
+                  color: active ? '#0066D0' : '#6B7280',
+                  cursor: 'pointer', fontFamily: 'inherit', transition: 'all .12s',
+                }}>{f.label}</button>
+              );
+            })}
+            {/* Active search chip */}
+            {debouncedSearch && (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, height: 24, padding: '0 8px', borderRadius: 99, background: '#FEF9C3', color: '#854D0E', fontSize: 11, fontWeight: 600, border: '1px solid #FDE68A' }}>
+                "{debouncedSearch}"
+                <button onClick={() => setSearch('')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#92400E', fontSize: 13, lineHeight: 1, padding: 0 }}>×</button>
+              </span>
+            )}
+            {/* Clear all (when any filter active) */}
+            {(genderFilter || debouncedSearch) && (
+              <button onClick={() => { setGenderFilter(''); setSearch(''); }} style={{ height: 24, padding: '0 8px', border: 'none', background: 'none', fontSize: 11, color: '#6B7280', cursor: 'pointer', fontFamily: 'inherit', textDecoration: 'underline' }}>
+                Limpar tudo
+              </button>
+            )}
           </div>
         </div>
 
-        {/* Table area */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '0 24px 20px' }}>
-          <div style={{ background: '#fff', border: '1px solid #E5E7EB', borderRadius: 8, overflow: 'hidden' }}>
+        {/* ── Tabs ── */}
+        <div style={{ padding: '0 20px', background: '#F5F6F8' }}>
+          <div style={{ display: 'flex', borderBottom: '2px solid #E5E7EB', gap: 0 }}>
+            {([
+              { id: 'prontuario',    label: 'Prontuários' },
+              { id: 'atendimento',   label: 'Atendimento' },
+              { id: 'relacionamento',label: 'Relacionamento' },
+              { id: 'arquivos',      label: 'Arquivos' },
+            ] as const).map(tab => (
+              <button key={tab.id} onClick={() => setListTab(tab.id)} style={{
+                padding: '10px 18px', fontSize: 13, fontWeight: listTab === tab.id ? 700 : 500,
+                color: listTab === tab.id ? '#0066D0' : '#6B7280',
+                background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+                borderBottom: `2px solid ${listTab === tab.id ? '#0066D0' : 'transparent'}`,
+                marginBottom: -2, transition: 'color .12s',
+              }}>{tab.label}</button>
+            ))}
+          </div>
+        </div>
 
-            {/* Toolbar */}
-            <div style={{ padding: '10px 12px', borderBottom: '1px solid #E5E7EB', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div style={{ display: 'flex', gap: 6 }}>
-                <button style={{ height: 32, padding: '0 10px', border: '1px solid #E5E7EB', borderRadius: 6, background: '#fff', fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}>
-                  ✓ <span style={{ color: '#6B7280' }}>▾</span>
-                </button>
+        {/* ── Table area ── */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '0 20px 20px', position: 'relative' }}>
+
+          {/* Non-prontuario tabs placeholder */}
+          {listTab !== 'prontuario' && (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: 300, gap: 12 }}>
+              <div style={{ fontSize: 36 }}>{listTab === 'atendimento' ? '🩺' : listTab === 'relacionamento' ? '🤝' : '📁'}</div>
+              <div style={{ fontSize: 15, fontWeight: 600, color: '#374151' }}>
+                {listTab === 'atendimento' ? 'Atendimentos rápidos' : listTab === 'relacionamento' ? 'Relacionamento com pacientes' : 'Arquivos e documentos'}
               </div>
-              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                <button
-                  onClick={() => {/* future: new patient */}}
-                  style={{ height: 34, padding: '0 16px', background: '#0066D0', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', letterSpacing: 0.3 }}
-                >
-                  NOVO PACIENTE
-                </button>
-
-                {/* Filter dropdown button */}
-                <div style={{ position: 'relative' }}>
-                  <button
-                    onClick={() => setShowFilterMenu(p => !p)}
-                    style={{ height: 34, padding: '0 10px', border: '1px solid #E5E7EB', borderRadius: 6, background: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, fontSize: 13, color: '#374151', fontFamily: 'inherit' }}
-                  >
-                    ⚙ <span style={{ fontSize: 11 }}>▾</span>
-                  </button>
-                  {showFilterMenu && (
-                    <>
-                      {/* Backdrop */}
-                      <div style={{ position: 'fixed', inset: 0, zIndex: 99 }} onClick={() => setShowFilterMenu(false)} />
-                      {/* Menu */}
-                      <div style={{ position: 'absolute', right: 0, top: 38, background: '#fff', border: '1px solid #E5E7EB', borderRadius: 7, boxShadow: '0 8px 24px rgba(0,0,0,.12)', zIndex: 100, minWidth: 180, overflow: 'hidden' }}>
-                        {[
-                          { key: '',          label: 'Remover filtros',  color: '#374151' },
-                          { key: 'masculino', label: 'Sexo masculino',   color: '#374151' },
-                          { key: 'feminino',  label: 'Sexo feminino',    color: '#374151' },
-                          { key: 'obito',     label: 'Óbitos',           color: '#EF4444' },
-                          { key: 'ativo',     label: 'Ativos',           color: '#374151' },
-                          { key: 'inativo',   label: 'Inativos',         color: '#F59E0B' },
-                        ].map(opt => (
-                          <div
-                            key={opt.key}
-                            onClick={() => { setGenderFilter(opt.key); setShowFilterMenu(false); }}
-                            style={{
-                              padding: '9px 16px', fontSize: 13, color: opt.color, cursor: 'pointer',
-                              background: genderFilter === opt.key ? '#F3F4F6' : '#fff',
-                              fontWeight: genderFilter === opt.key ? 600 : 400,
-                            }}
-                            onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = '#F9FAFB'}
-                            onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = genderFilter === opt.key ? '#F3F4F6' : '#fff'}
-                          >
-                            {opt.label}
-                          </div>
-                        ))}
-                      </div>
-                    </>
-                  )}
-                </div>
+              <div style={{ fontSize: 13, color: '#9CA3AF', textAlign: 'center', maxWidth: 300 }}>
+                {listTab === 'atendimento' ? 'Registre atendimentos sem abrir o prontuário completo.' : listTab === 'relacionamento' ? 'Acompanhe o histórico de comunicação e preferências.' : 'Gerencie documentos, laudos e imagens dos pacientes.'}
               </div>
             </div>
+          )}
+
+          {listTab === 'prontuario' && (<>
+          <div style={{ background: '#fff', border: '1px solid #E5E7EB', borderRadius: 8, overflow: 'hidden', marginTop: 12 }}>
 
             {/* Table */}
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead>
                   <tr>
-                    <th style={{ ...thStyle, width: 36 }}>
+                    <th style={{ ...thStyle, width: 32 }}>
                       <input type="checkbox" checked={allChecked}
                         onChange={e => setCheckedIds(e.target.checked ? searchedPatients.map(p => p.id) : [])}
                         style={{ cursor: 'pointer' }} />
                     </th>
-                    <th style={thStyle}>NOME</th>
-                    <th style={thStyle}>TELEFONE</th>
-                    <th style={thStyle}>CÓDIGO</th>
+                    <th style={thStyle}>PACIENTE</th>
+                    <th style={{ ...thStyle, color: '#9CA3AF' }}>TELEFONE</th>
+                    <th style={{ ...thStyle, color: '#9CA3AF' }}>CÓDIGO</th>
                     <th style={thStyle}>ÚLTIMA CONSULTA</th>
-                    <th style={thStyle}>DATA DE NASCIMENTO</th>
-                    <th style={thStyle}>CONVÊNIOS</th>
-                    <th style={{ ...thStyle, width: 40 }}></th>
+                    <th style={thStyle}>CONVÊNIO</th>
+                    <th style={{ ...thStyle, width: 120 }}></th>
                   </tr>
                 </thead>
                 <tbody>
                   {searchedPatients.length === 0 ? (
+                    /* ── Empty state ── */
                     <tr>
-                      <td colSpan={8} style={{ padding: '40px 12px', textAlign: 'center', color: '#9CA3AF', fontSize: 13 }}>
-                        Nenhum paciente encontrado
+                      <td colSpan={7} style={{ padding: '60px 12px', textAlign: 'center' }}>
+                        <div style={{ fontSize: 32, marginBottom: 8 }}>🔍</div>
+                        <div style={{ fontSize: 15, fontWeight: 600, color: '#374151', marginBottom: 4 }}>
+                          {debouncedSearch ? `Nenhum resultado para "${debouncedSearch}"` : 'Nenhum paciente encontrado'}
+                        </div>
+                        <div style={{ fontSize: 13, color: '#9CA3AF' }}>
+                          {debouncedSearch ? 'Tente outro nome, CPF ou telefone' : 'Cadastre o primeiro paciente para começar'}
+                        </div>
+                        {debouncedSearch && (
+                          <button onClick={() => setSearch('')} style={{ marginTop: 12, height: 32, padding: '0 16px', border: '1px solid #E5E7EB', borderRadius: 6, background: '#fff', fontSize: 12, cursor: 'pointer', color: '#374151', fontFamily: 'inherit' }}>
+                            Limpar busca
+                          </button>
+                        )}
                       </td>
                     </tr>
                   ) : searchedPatients.map(p => {
-                    const lastC = lastConsults[p.id];
+                    const lastC  = lastConsults[p.id];
+                    const av     = avColor(p.name);
+                    const ins    = p.insurance ?? 'Particular';
+                    const insMeta = getInsMeta(ins);
+                    const visit  = relVisit(lastC);
+                    const isMenuOpen = openRowMenu === p.id;
+                    const isHovered  = hoveredRow === p.id;
+                    const isChecked  = checkedIds.includes(p.id);
+
                     return (
-                      <tr key={p.id} style={{ background: checkedIds.includes(p.id) ? '#EFF6FF' : '#fff' }}
-                        onMouseEnter={e => { if (!checkedIds.includes(p.id)) (e.currentTarget as HTMLElement).style.background = '#F9FAFB'; }}
-                        onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = checkedIds.includes(p.id) ? '#EFF6FF' : '#fff'; }}
+                      <tr key={p.id}
+                        style={{ background: isChecked ? '#EFF6FF' : isHovered ? '#F8FAFC' : '#fff', cursor: 'pointer', transition: 'background .1s' }}
+                        onClick={() => { setSelected(p); setListView(false); setActiveSection('historico'); }}
+                        onMouseEnter={() => setHoveredRow(p.id)}
+                        onMouseLeave={() => { setHoveredRow(null); }}
                       >
-                        <td style={{ ...tdStyle, width: 36 }}>
-                          <input type="checkbox" checked={checkedIds.includes(p.id)}
+                        {/* Checkbox — stop row click */}
+                        <td style={{ ...tdStyle, width: 32 }} onClick={e => e.stopPropagation()}>
+                          <input type="checkbox" checked={isChecked}
                             onChange={e => setCheckedIds(prev => e.target.checked ? [...prev, p.id] : prev.filter(id => id !== p.id))}
                             style={{ cursor: 'pointer' }} />
                         </td>
-                        {/* Clickable name */}
+
+                        {/* Avatar + Nome + idade (linha secundária) */}
                         <td style={tdStyle}>
-                          <span
-                            onClick={() => { setSelected(p); setListView(false); setActiveSection('historico'); }}
-                            style={{ color: '#0066D0', fontWeight: 500, cursor: 'pointer', textDecoration: 'none' }}
-                            onMouseEnter={e => (e.currentTarget as HTMLElement).style.textDecoration = 'underline'}
-                            onMouseLeave={e => (e.currentTarget as HTMLElement).style.textDecoration = 'none'}
-                          >
-                            {p.name}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                            <div style={{ width: 30, height: 30, borderRadius: '50%', background: av.bg, color: av.color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700, flexShrink: 0, userSelect: 'none' }}>
+                              {initials(p.name)}
+                            </div>
+                            <div>
+                              <div style={{ fontWeight: 700, color: '#111827', fontSize: 13, lineHeight: 1.3 }}>
+                                {hl(p.name, debouncedSearch)}
+                              </div>
+                              {p.birth_date && (
+                                <div style={{ fontSize: 11, color: '#9CA3AF', lineHeight: 1.2, marginTop: 1 }}>
+                                  {calcAge(p.birth_date)} anos
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </td>
+
+                        {/* Telefone — de-emphasised */}
+                        <td style={{ ...tdStyle, color: '#9CA3AF', fontSize: 12, fontVariantNumeric: 'tabular-nums' }}>
+                          {fmtPhone(p.phone)}
+                        </td>
+
+                        {/* Código — de-emphasised */}
+                        <td style={{ ...tdStyle, color: '#9CA3AF', fontSize: 12, fontVariantNumeric: 'tabular-nums' }}>
+                          {patientCode(p.id)}
+                        </td>
+
+                        {/* Última consulta — tempo relativo + cor */}
+                        <td style={{ ...tdStyle }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                            <span style={{ width: 7, height: 7, borderRadius: '50%', background: visit.dotColor, flexShrink: 0, display: 'inline-block' }} />
+                            <span style={{ fontSize: 12, fontWeight: 600, color: visit.textColor }}>{visit.label}</span>
+                            {lastC && <span style={{ fontSize: 11, color: '#D1D5DB' }}>{new Date(lastC).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}</span>}
+                          </div>
+                        </td>
+
+                        {/* Convênio badge */}
+                        <td style={tdStyle}>
+                          <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 99, fontSize: 11, fontWeight: 600, background: insMeta.bg, color: insMeta.color, whiteSpace: 'nowrap' }}>
+                            {ins}
                           </span>
                         </td>
-                        <td style={{ ...tdStyle, color: '#0066D0' }}>{p.phone ?? '—'}</td>
-                        <td style={tdStyle}>{patientCode(p.id)}</td>
-                        <td style={tdStyle}>
-                          {lastC ? new Date(lastC).toLocaleDateString('pt-BR') : '—'}
-                        </td>
-                        <td style={tdStyle}>
-                          {p.birth_date ? new Date(p.birth_date + 'T12:00:00').toLocaleDateString('pt-BR') : '—'}
-                        </td>
-                        <td style={tdStyle}>{p.insurance ?? 'Particular'}</td>
-                        <td style={{ ...tdStyle, textAlign: 'center' }}>
-                          <span style={{ color: '#0066D0', cursor: 'pointer', fontSize: 15 }}
-                            onClick={() => { setSelected(p); setListView(false); setActiveSection('historico'); }}
-                          >✏</span>
+
+                        {/* Quick actions (hover) + kebab */}
+                        <td style={{ ...tdStyle, width: 120, minWidth: 120, maxWidth: 120 }} onClick={e => e.stopPropagation()}>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 }}>
+                            {/* Hover quick actions — fixed width so they don't shift layout */}
+                            <div style={{ display: 'flex', gap: 4, opacity: isHovered ? 1 : 0, pointerEvents: isHovered ? 'auto' : 'none', transition: 'opacity .12s' }}>
+                              <button onClick={() => { setSelected(p); setListView(false); setActiveSection('historico'); }} style={qaBtn('#0066D0')} title="Visualizar prontuário">Ver</button>
+                              <button onClick={e => { e.stopPropagation(); setApptPatient(p); setShowApptModal(true); }} style={qaBtn('#059669')} title="Marcar consulta">Agendar</button>
+                            </div>
+                            {/* Kebab menu — portal para não ser cortado por overflow */}
+                            <div style={{ position: 'relative' }}>
+                              <button
+                                id={`kebab-${p.id}`}
+                                onClick={e => { e.stopPropagation(); setOpenRowMenu(isMenuOpen ? null : p.id); }}
+                                style={{ width: 26, height: 26, border: '1px solid transparent', borderRadius: 5, background: isMenuOpen ? '#F3F4F6' : 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, color: '#9CA3AF', fontFamily: 'inherit' }}
+                                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = '#F3F4F6'; }}
+                                onMouseLeave={e => { if (!isMenuOpen) (e.currentTarget as HTMLElement).style.background = 'none'; }}
+                              >⋮</button>
+                              {isMenuOpen && ReactDOM.createPortal(
+                                <>
+                                  <div style={{ position: 'fixed', inset: 0, zIndex: 9998 }} onClick={() => setOpenRowMenu(null)} />
+                                  <div style={{
+                                    position: 'fixed',
+                                    zIndex: 9999,
+                                    ...(() => {
+                                      const btn = document.getElementById(`kebab-${p.id}`);
+                                      if (!btn) return { top: 0, right: 0 };
+                                      const r = btn.getBoundingClientRect();
+                                      const dropH = 176;
+                                      const goUp = r.bottom + dropH > window.innerHeight;
+                                      return {
+                                        top: goUp ? r.top - dropH : r.bottom + 4,
+                                        left: Math.max(8, r.right - 170),
+                                      };
+                                    })(),
+                                    background: '#fff', border: '1px solid #E5E7EB', borderRadius: 7,
+                                    boxShadow: '0 8px 24px rgba(0,0,0,.12)', minWidth: 170, overflow: 'hidden',
+                                  }}>
+                                    {[
+                                      { label: '👁  Visualizar',       action: () => { setSelected(p); setListView(false); setActiveSection('historico'); setOpenRowMenu(null); } },
+                                      { label: '✏️  Editar dados',      action: () => { setSelected(p); setListView(false); setActiveSection('historico'); setOpenRowMenu(null); } },
+                                      { label: '📅  Marcar consulta',  action: () => { setApptPatient(p); setShowApptModal(true); setOpenRowMenu(null); } },
+                                      { label: '📋  Copiar código',     action: () => { copyToClipboard(patientCode(p.id)); setOpenRowMenu(null); } },
+                                    ].map((item, idx) => (
+                                      <div key={idx} onClick={item.action}
+                                        style={{ padding: '9px 14px', fontSize: 13, color: '#374151', cursor: 'pointer', background: '#fff' }}
+                                        onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = '#F9FAFB'}
+                                        onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = '#fff'}
+                                      >{item.label}</div>
+                                    ))}
+                                  </div>
+                                </>,
+                                document.body,
+                              )}
+                            </div>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -1789,14 +2898,71 @@ function Prontuario({ initialPatientId }: { initialPatientId?: string }) {
                 </tbody>
               </table>
             </div>
+
+            {/* Footer count */}
+            <div style={{ padding: '10px 16px', borderTop: '1px solid #F3F4F6', display: 'flex', justifyContent: 'center', alignItems: 'center', fontSize: 12, color: '#9CA3AF', background: '#FAFAFA' }}>
+              {searchedPatients.length} paciente{searchedPatients.length !== 1 ? 's' : ''}
+              {filterChips.length > 0 && <span style={{ marginLeft: 5, color: '#D1D5DB' }}>· com filtros ativos</span>}
+            </div>
           </div>
 
-          {/* Footer count */}
-          <div style={{ padding: '10px 4px', fontSize: 12, color: '#6B7280' }}>
-            {searchedPatients.length} resultado{searchedPatients.length !== 1 ? 's' : ''}
-          </div>
+          {/* ── Bulk action sticky bar ── */}
+          {checkedIds.length > 0 && (
+            <div style={{
+              position: 'sticky', bottom: 20, margin: '12px 0 0',
+              background: '#1E293B', borderRadius: 10, padding: '10px 16px',
+              display: 'flex', alignItems: 'center', gap: 10,
+              boxShadow: '0 8px 32px rgba(0,0,0,.25)',
+            }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: '#fff', flexShrink: 0 }}>
+                {checkedIds.length} selecionado{checkedIds.length > 1 ? 's' : ''}
+              </span>
+              <div style={{ flex: 1, height: 1, background: '#334155' }} />
+              {[
+                { label: '✉ Mensagem', color: '#60A5FA', stub: true },
+                { label: '⬇ Exportar',  color: '#34D399', stub: true },
+                { label: '🏷 Marcar',    color: '#A78BFA', stub: false },
+              ].map(a => (
+                <button key={a.label} disabled={a.stub} style={{ height: 30, padding: '0 12px', borderRadius: 6, border: `1px solid ${a.color}40`, background: `${a.color}15`, color: a.color, fontSize: 12, fontWeight: 600, cursor: a.stub ? 'not-allowed' : 'pointer', fontFamily: 'inherit', opacity: a.stub ? 0.4 : 1 }}>
+                  {a.label}
+                </button>
+              ))}
+              <button onClick={() => setCheckedIds([])} style={{ height: 30, padding: '0 10px', borderRadius: 6, border: '1px solid #475569', background: 'none', color: '#94A3B8', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
+                Cancelar
+              </button>
+            </div>
+          )}
+          </>)} {/* end listTab === 'prontuario' */}
         </div>
       </div>
+      {showApptModal && (
+        <AddAppointmentModal
+          initialPatient={apptPatient ?? undefined}
+          onClose={() => { setShowApptModal(false); setApptPatient(null); }}
+        />
+      )}
+      </>
+    );
+  }
+
+  // ── Novo layout EHR ao abrir um paciente ──
+  if (!listView && selected) {
+    return (
+      <>
+        <EHRAtendimento
+          patient={selected}
+          onClose={() => { setListView(true); setTimerActive(false); setTimerSecs(0); }}
+        />
+        {showAddPtInList && (
+          <AddPatientModal
+            onClose={() => setShowAddPtInList(false)}
+            onSaved={() => {
+              setShowAddPtInList(false);
+              supabase.from('patients').select('*').eq('active', true).order('name')
+                .then(({ data }) => setPatients((data as Patient[]) ?? []));
+            }}
+          />
+        )}
       </>
     );
   }
@@ -1819,35 +2985,38 @@ function Prontuario({ initialPatientId }: { initialPatientId?: string }) {
             {selected?.name}
           </div>
 
-          {/* Timer / Iniciar / Encerrar button */}
+          {/* Timer / Iniciar / Finalizar button */}
           {!timerActive ? (
             <button
-              onClick={() => { if (selected) { setTimerActive(true); setTimerSecs(0); } }}
+              onClick={() => { if (selected) { setTimerActive(true); setTimerSecs(0); setActiveSection('atendimento'); setAtendSaved(false); setAtendQueixa(''); setAtendEvolucao(''); setAtendDiag(''); setAtendCid(''); setAtendConduta(''); setAtendRetorno(''); } }}
               style={{ width: '100%', height: 36, background: '#0066D0', color: '#fff', border: 'none', borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
             >
               <Icon name="clock" size={13} color="#fff" /> Iniciar atendimento
             </button>
           ) : (
-            <div style={{ display: 'flex', borderRadius: 7, overflow: 'hidden', border: '1px solid #0066D0' }}>
-              {/* Timer display */}
-              <div style={{ flex: 1, background: '#EFF6FF', padding: '0 8px', display: 'flex', alignItems: 'center', gap: 5, height: 36 }}>
-                <span style={{ fontSize: 11 }}>⏱</span>
-                <span style={{ fontFamily: 'monospace', fontSize: 13, fontWeight: 700, color: '#0066D0', letterSpacing: 1 }}>{timerStr}</span>
-              </div>
-              {/* Encerrar */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {/* Finalizar atendimento */}
               <button
-                onClick={() => { setTimerActive(false); setShowConsulta(true); }}
-                style={{ height: 36, padding: '0 10px', background: '#DC2626', color: '#fff', border: 'none', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0 }}
+                onClick={() => { setTimerActive(false); setTimerSecs(0); setShowConsulta(true); }}
+                style={{ width: '100%', height: 36, background: '#DC2626', color: '#fff', border: 'none', borderRadius: 7, fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}
               >
-                Encerrar
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#fff', display: 'inline-block', flexShrink: 0 }} />
+                Finalizar atendimento
               </button>
+              {/* Duration row */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 8px', background: '#F9FAFB', borderRadius: 6, border: '1px solid #E5E7EB' }}>
+                <span style={{ fontSize: 11, color: '#6B7280', display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <span style={{ fontSize: 13 }}>👁</span> Duração
+                </span>
+                <span style={{ fontFamily: 'monospace', fontSize: 12, fontWeight: 700, color: '#374151', letterSpacing: 1 }}>{timerStr}</span>
+              </div>
             </div>
           )}
         </div>
 
         {/* Nav sections */}
         <div style={{ flex: 1, paddingTop: 6 }}>
-          {sections.map(s => (
+          {(timerActive ? extendedSections : sections).map(s => (
             <div key={s.id} onClick={() => setActiveSection(s.id)} style={{
               padding: '10px 12px', cursor: 'pointer', fontSize: 13,
               color: activeSection === s.id ? '#0066D0' : '#374151',
@@ -1864,16 +3033,6 @@ function Prontuario({ initialPatientId }: { initialPatientId?: string }) {
       {/* ══ MAIN CONTENT ══ */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
-        {/* Banner */}
-        {showBanner && (
-          <div style={{ background: '#EFF6FF', borderBottom: '1px solid #BFDBFE', padding: '7px 16px', display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-            <span style={{ fontSize: 12, color: '#1E40AF', flex: 1 }}>
-              <strong>Você está no novo iClinic</strong> · Use a melhor experiência do iClinic com recursos gratuitos de IA. Ao voltar para a versão antiga, esses recursos ficam indisponíveis. Continue na nova versão e aproveite!
-            </span>
-            <button onClick={() => setShowBanner(false)} style={{ height: 26, padding: '0 10px', border: '1px solid #BFDBFE', borderRadius: 5, background: '#fff', fontSize: 11, color: '#1E40AF', cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0 }}>Usar versão antiga</button>
-            <button onClick={() => setShowBanner(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9CA3AF', fontSize: 18, lineHeight: 1 }}>×</button>
-          </div>
-        )}
 
         <div style={{ flex: 1, overflowY: 'auto', background: '#F5F6F8' }}>
           {selected ? (
@@ -1884,7 +3043,7 @@ function Prontuario({ initialPatientId }: { initialPatientId?: string }) {
                 {tags.map(t => (
                   <span key={t.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 9px', background: t.color ?? '#0066D0', color: '#fff', borderRadius: 9999, fontSize: 11, fontWeight: 600 }}>
                     {t.label}
-                    <span onClick={() => supabase.from('patient_tags').delete().eq('id', t.id).then(() => loadTags(selected.id))} style={{ cursor: 'pointer', opacity: 0.8 }}>×</span>
+                    <span onClick={() => { if (window.confirm(`Remover tag "${t.label}"?`)) supabase.from('patient_tags').delete().eq('id', t.id).then(() => loadTags(selected.id)); }} style={{ cursor: 'pointer', opacity: 0.8 }}>×</span>
                   </span>
                 ))}
                 {showTagInput ? (
@@ -1932,9 +3091,36 @@ function Prontuario({ initialPatientId }: { initialPatientId?: string }) {
               {/* ── Anamnesis cards ── */}
               <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 2 }}>
                 {anamnesisTitles.map((a, i) => (
-                  <div key={i} style={{ flex: '0 0 150px', background: '#fff', border: '1px solid #E5E7EB', borderRadius: 7, padding: '10px 12px', minHeight: 68 }}>
-                    <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 5 }}>{a}</div>
-                    <div style={{ fontSize: 11, color: anamVals[i] ? '#374151' : '#9CA3AF' }}>
+                  <div
+                    key={i}
+                    onClick={() => { setAnamEditIdx(i); setAnamEditVal(anamVals[i] ?? ''); }}
+                    style={{
+                      flex: '0 0 150px', background: '#fff',
+                      border: `1px solid ${anamVals[i] ? '#D1D5DB' : '#E5E7EB'}`,
+                      borderRadius: 7, padding: '10px 12px', minHeight: 68,
+                      cursor: 'pointer', transition: 'border-color .15s, box-shadow .15s',
+                    }}
+                    onMouseEnter={e => {
+                      (e.currentTarget as HTMLDivElement).style.borderColor = '#0066D0';
+                      (e.currentTarget as HTMLDivElement).style.boxShadow = '0 0 0 3px rgba(0,102,208,.1)';
+                    }}
+                    onMouseLeave={e => {
+                      (e.currentTarget as HTMLDivElement).style.borderColor = anamVals[i] ? '#D1D5DB' : '#E5E7EB';
+                      (e.currentTarget as HTMLDivElement).style.boxShadow = 'none';
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 5 }}>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: '#374151' }}>{a}</div>
+                      <span style={{ fontSize: 11, color: '#9CA3AF', opacity: 0.6 }}>✏️</span>
+                    </div>
+                    <div style={{
+                      fontSize: 11,
+                      color: anamVals[i] ? '#374151' : '#9CA3AF',
+                      overflow: 'hidden',
+                      display: '-webkit-box',
+                      WebkitLineClamp: 3,
+                      WebkitBoxOrient: 'vertical' as any,
+                    }}>
                       {anamVals[i] ?? 'Inserir informação'}
                     </div>
                   </div>
@@ -2008,7 +3194,7 @@ function Prontuario({ initialPatientId }: { initialPatientId?: string }) {
                             {/* Header */}
                             <div style={{ padding: '8px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                <span style={{ fontSize: 12, color: '#374151' }}>Por: <strong>guilherme teixeira</strong></span>
+                                <span style={{ fontSize: 12, color: '#374151' }}>Por: <strong>{doctor.name}</strong></span>
                                 <span style={{ fontSize: 13, color: '#9CA3AF' }}>🔒</span>
                               </div>
                               <span style={{ fontSize: 11, color: '#9CA3AF' }}>
@@ -2153,14 +3339,14 @@ function Prontuario({ initialPatientId }: { initialPatientId?: string }) {
                         <span style={{ fontSize: 13, fontWeight: 600, color: '#111827' }}>Criar Prescrição</span>
                       </div>
                       <div style={{ display: 'flex', gap: 8 }}>
-                        <button onClick={() => {/* future: usar modelo */}} style={{
+                        <button onClick={() => setShowModelPicker(true)} style={{
                           height: 32, padding: '0 14px', border: '1px solid #0066D0', borderRadius: 6,
                           background: '#fff', color: '#0066D0', fontSize: 12, fontWeight: 500,
                           cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 5,
                         }}>
                           📋 Usar Modelo
                         </button>
-                        <button onClick={() => setShowCreatePresc(true)} style={{
+                        <button onClick={() => { setPendingModelItems(null); setShowCreatePresc(true); }} style={{
                           height: 32, padding: '0 14px', border: 'none', borderRadius: 6,
                           background: '#0066D0', color: '#fff', fontSize: 12, fontWeight: 600,
                           cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 5,
@@ -2174,7 +3360,7 @@ function Prontuario({ initialPatientId }: { initialPatientId?: string }) {
                     <div style={{ padding: '12px 14px', borderBottom: '1px solid #F3F4F6' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
                         <span style={{ fontSize: 12, fontWeight: 600, color: '#374151' }}>Prescrições mais recentes</span>
-                        <button style={{ fontSize: 11, color: '#0066D0', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <button onClick={() => setActiveSection('historico')} style={{ fontSize: 11, color: '#0066D0', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 4 }}>
                           📋 Ver Todo Histórico
                         </button>
                       </div>
@@ -2195,7 +3381,7 @@ function Prontuario({ initialPatientId }: { initialPatientId?: string }) {
                             {mostRecent.medication}
                             {groups[0]?.items.length > 1 ? ` + ${groups[0].items.length - 1} item(s) (...)` : ''}
                           </div>
-                          <button style={{
+                          <button onClick={() => setActiveSection('historico')} style={{
                             height: 26, padding: '0 10px', background: '#EFF6FF', border: '1px solid #BFDBFE',
                             borderRadius: 5, color: '#1E40AF', fontSize: 11, fontWeight: 500,
                             cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0,
@@ -2216,14 +3402,14 @@ function Prontuario({ initialPatientId }: { initialPatientId?: string }) {
                           <span style={{ fontSize: 12, fontWeight: 600, color: '#374151' }}>Biblioteca de modelos</span>
                         </div>
                         <div style={{ display: 'flex', gap: 12 }}>
-                          <button style={{ fontSize: 11, color: '#6B7280', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>Dicas De Uso</button>
-                          <button style={{ fontSize: 11, color: '#6B7280', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>Gerenciar</button>
+                          <button onClick={() => alert('💡 Dicas:\n\n• Salve prescrições frequentes como modelos\n• Use "Usar Modelo" para agilizar a criação\n• Modelos ficam disponíveis para todos os pacientes')} style={{ fontSize: 11, color: '#6B7280', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>Dicas De Uso</button>
+                          <button onClick={() => setShowManageModels(true)} style={{ fontSize: 11, color: '#0066D0', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>Gerenciar</button>
                         </div>
                       </div>
                       {prescModels.length === 0 ? (
                         <div style={{ border: '1.5px dashed #E5E7EB', borderRadius: 7, padding: '18px 12px', textAlign: 'center' }}>
                           <div style={{ fontSize: 12, color: '#9CA3AF', marginBottom: 8 }}>Você não adicionou modelos</div>
-                          <button style={{
+                          <button onClick={() => setShowAddModel(true)} style={{
                             fontSize: 12, color: '#0066D0', background: 'none', border: 'none',
                             cursor: 'pointer', fontFamily: 'inherit', display: 'inline-flex', alignItems: 'center', gap: 4,
                           }}>
@@ -2233,7 +3419,7 @@ function Prontuario({ initialPatientId }: { initialPatientId?: string }) {
                       ) : prescModels.map((m, mi) => (
                         <div key={m.id} style={{ padding: '8px 10px', background: '#F9FAFB', borderRadius: 6, border: '1px solid #E5E7EB', marginBottom: 6, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                           <span style={{ fontSize: 12, color: '#374151' }}>{m.name}</span>
-                          <button onClick={() => {/* future: apply model */}} style={{ fontSize: 11, color: '#0066D0', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>Usar</button>
+                          <button onClick={() => { setPendingModelItems(m.items.map((it: any) => ({ med: it.med ?? it.medication ?? '', dose: it.dose ?? it.dosage ?? '', freq: it.freq ?? it.frequency ?? '', dur: it.dur ?? it.duration ?? '' }))); setShowCreatePresc(true); }} style={{ fontSize: 11, color: '#0066D0', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>Usar</button>
                         </div>
                       ))}
                     </div>
@@ -2263,7 +3449,7 @@ function Prontuario({ initialPatientId }: { initialPatientId?: string }) {
                         <div style={{ flex: 1, border: '1px solid #E5E7EB', borderRadius: 8, background: '#fff', overflow: 'hidden' }}>
                           {/* By line */}
                           <div style={{ padding: '7px 14px', borderBottom: '1px solid #F3F4F6', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <span style={{ fontSize: 12, color: '#374151' }}>Por: <strong>guilherme teixeira</strong></span>
+                            <span style={{ fontSize: 12, color: '#374151' }}>Por: <strong>{doctor.name}</strong></span>
                             <span style={{ fontSize: 11, color: '#9CA3AF' }}>⏱ {time}</span>
                           </div>
                           {/* Section title */}
@@ -2312,21 +3498,527 @@ function Prontuario({ initialPatientId }: { initialPatientId?: string }) {
               );
             })()}
 
-              {activeSection === 'acomp' && (
-                <Card>
-                  <div style={{ padding: '10px 16px', borderBottom: '1px solid #F3F4F6', fontSize: 13, fontWeight: 600, color: '#111827' }}>Tabela de Acompanhamentos</div>
-                  {records.filter(r => r.return_date).length === 0
-                    ? <div style={{ padding: '24px 16px', textAlign: 'center', color: '#9CA3AF', fontSize: 13 }}>Nenhum retorno agendado</div>
-                    : records.filter(r => r.return_date).map((r, i, arr) => (
-                      <div key={r.id} style={{ padding: '12px 16px', borderBottom: i < arr.length - 1 ? '1px solid #F3F4F6' : 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <div>
-                          <div style={{ fontSize: 13, fontWeight: 500, color: '#111827' }}>Retorno agendado</div>
-                          {r.return_notes && <div style={{ fontSize: 12, color: '#6B7280' }}>{r.return_notes}</div>}
-                        </div>
-                        <Badge variant="blue">{r.return_date ? new Date(r.return_date + 'T12:00:00').toLocaleDateString('pt-BR') : ''}</Badge>
+              {activeSection === 'acomp' && (() => {
+                const returnRecords = records.filter(r => r.return_date).sort((a, b) => (a.return_date! > b.return_date! ? 1 : -1));
+                const upcoming = returnRecords.filter(r => r.return_date! >= new Date().toISOString().slice(0, 10));
+                const past = returnRecords.filter(r => r.return_date! < new Date().toISOString().slice(0, 10));
+                return (
+                  <Card>
+                    <div style={{ padding: '12px 16px', borderBottom: '1px solid #F3F4F6', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: '#111827' }}>📅 Acompanhamentos e Retornos</div>
+                      <button onClick={() => setShowConsulta(true)} style={{ height: 30, padding: '0 12px', background: '#0066D0', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 5 }}>
+                        + Agendar retorno
+                      </button>
+                    </div>
+
+                    {returnRecords.length === 0 ? (
+                      <div style={{ padding: '32px 16px', textAlign: 'center' }}>
+                        <div style={{ fontSize: 28, marginBottom: 8 }}>📭</div>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>Nenhum retorno registrado</div>
+                        <div style={{ fontSize: 12, color: '#9CA3AF', marginTop: 4 }}>Agende um retorno ao finalizar uma consulta</div>
                       </div>
-                    ))
-                  }
+                    ) : (
+                      <div>
+                        {upcoming.length > 0 && (
+                          <>
+                            <div style={{ padding: '8px 16px', background: '#F9FAFB', borderBottom: '1px solid #F3F4F6' }}>
+                              <span style={{ fontSize: 11, fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', letterSpacing: 0.5 }}>Próximos ({upcoming.length})</span>
+                            </div>
+                            {upcoming.map((r, i) => {
+                              const d = new Date(r.return_date! + 'T12:00:00');
+                              const daysUntil = Math.round((d.getTime() - Date.now()) / 86400000);
+                              return (
+                                <div key={r.id} style={{ padding: '12px 16px', borderBottom: '1px solid #F3F4F6', display: 'flex', alignItems: 'center', gap: 12 }}>
+                                  <div style={{ width: 40, height: 40, borderRadius: 8, background: '#EFF6FF', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                                    <div style={{ fontSize: 14, fontWeight: 800, color: '#1E40AF', lineHeight: 1 }}>{d.getDate().toString().padStart(2, '0')}</div>
+                                    <div style={{ fontSize: 9, fontWeight: 700, color: '#1E40AF' }}>{d.toLocaleString('pt-BR', { month: 'short' }).toUpperCase()}</div>
+                                  </div>
+                                  <div style={{ flex: 1 }}>
+                                    <div style={{ fontSize: 13, fontWeight: 500, color: '#111827' }}>Retorno agendado</div>
+                                    {r.return_notes && <div style={{ fontSize: 12, color: '#6B7280', marginTop: 1 }}>{r.return_notes}</div>}
+                                  </div>
+                                  <span style={{ fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 20, background: daysUntil <= 7 ? '#FEF9C3' : '#F0FDF4', color: daysUntil <= 7 ? '#92400E' : '#166534' }}>
+                                    {daysUntil === 0 ? 'Hoje' : daysUntil === 1 ? 'Amanhã' : `em ${daysUntil} dias`}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </>
+                        )}
+                        {past.length > 0 && (
+                          <>
+                            <div style={{ padding: '8px 16px', background: '#F9FAFB', borderBottom: '1px solid #F3F4F6' }}>
+                              <span style={{ fontSize: 11, fontWeight: 700, color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: 0.5 }}>Anteriores ({past.length})</span>
+                            </div>
+                            {past.slice(0, 5).map(r => {
+                              const d = new Date(r.return_date! + 'T12:00:00');
+                              const rec = records.find(rec => rec.return_date === r.return_date);
+                              const hadConsult = records.some(rec2 => rec2.created_at.slice(0, 10) === r.return_date);
+                              return (
+                                <div key={r.id} style={{ padding: '10px 16px', borderBottom: '1px solid #F3F4F6', display: 'flex', alignItems: 'center', gap: 12, opacity: 0.7 }}>
+                                  <div style={{ width: 40, height: 40, borderRadius: 8, background: '#F3F4F6', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                                    <div style={{ fontSize: 13, fontWeight: 800, color: '#6B7280', lineHeight: 1 }}>{d.getDate().toString().padStart(2, '0')}</div>
+                                    <div style={{ fontSize: 9, fontWeight: 700, color: '#9CA3AF' }}>{d.toLocaleString('pt-BR', { month: 'short' }).toUpperCase()}</div>
+                                  </div>
+                                  <div style={{ flex: 1 }}>
+                                    <div style={{ fontSize: 12, color: '#6B7280' }}>Retorno {d.toLocaleDateString('pt-BR')}</div>
+                                    {r.return_notes && <div style={{ fontSize: 11, color: '#9CA3AF' }}>{r.return_notes}</div>}
+                                  </div>
+                                  <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 20, background: hadConsult ? '#F0FDF4' : '#FFF7ED', color: hadConsult ? '#166534' : '#92400E' }}>
+                                    {hadConsult ? '✓ Consulta realizada' : 'Sem registro'}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </Card>
+                );
+              })()}
+
+              {activeSection === 'atendimento' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+
+                  {/* Header card */}
+                  <div style={{ background: timerActive ? 'linear-gradient(135deg,#EFF6FF,#F0F9FF)' : '#fff', border: `1px solid ${timerActive ? '#BFDBFE' : '#E5E7EB'}`, borderRadius: 10, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <div style={{ width: 36, height: 36, borderRadius: 8, background: timerActive ? '#1E40AF' : '#6B7280', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0 }}>🩺</div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: '#111827' }}>
+                        {timerActive ? 'Atendimento em andamento' : 'Registro de Consulta'}
+                      </div>
+                      <div style={{ fontSize: 11, color: '#6B7280' }}>
+                        {timerActive ? `Duração: ${timerStr} · Clique em "Finalizar" na barra lateral para encerrar` : 'Inicie o atendimento para ativar o registro'}
+                      </div>
+                    </div>
+                    {timerActive && (
+                      <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 20, background: '#DCFCE7', color: '#166534' }}>
+                        ● Em consulta
+                      </span>
+                    )}
+                  </div>
+
+                  {/* SOAP Form */}
+                  <Card>
+                    {(() => {
+                      const ta: CSSProperties = {
+                        width: '100%', border: '1.5px solid #E5E7EB', borderRadius: 8,
+                        padding: '9px 12px', fontSize: 13, color: '#111827',
+                        fontFamily: 'inherit', outline: 'none', resize: 'vertical',
+                        lineHeight: 1.6, boxSizing: 'border-box', background: '#fff',
+                        transition: 'border-color .15s',
+                      };
+                      const fieldLbl: CSSProperties = { fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 5 };
+                      const fieldGrp: CSSProperties = { display: 'flex', flexDirection: 'column' };
+                      const sectionBadge = (letter: string, color: string) => (
+                        <span style={{ width: 20, height: 20, borderRadius: 5, background: color, color: '#fff', fontSize: 11, fontWeight: 800, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{letter}</span>
+                      );
+
+                      return (
+                        <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+
+                          {/* S — Subjective */}
+                          <div style={fieldGrp}>
+                            <label style={fieldLbl}>{sectionBadge('S','#3B82F6')} Queixa principal / Subjetivo</label>
+                            <textarea
+                              value={atendQueixa} onChange={e => setAtendQueixa(e.target.value)}
+                              placeholder="Relato do paciente: queixa principal, história da doença atual, duração dos sintomas..."
+                              rows={3} style={ta} disabled={atendSaved}
+                              onFocus={e => (e.target.style.borderColor='#0066D0')}
+                              onBlur={e => (e.target.style.borderColor='#E5E7EB')}
+                            />
+                          </div>
+
+                          {/* O — Objective */}
+                          <div style={fieldGrp}>
+                            <label style={fieldLbl}>{sectionBadge('O','#10B981')} Exame físico / Objetivo</label>
+                            <textarea
+                              value={atendEvolucao} onChange={e => setAtendEvolucao(e.target.value)}
+                              placeholder="Sinais vitais, achados do exame físico, resultados de exames laboratoriais/imagem..."
+                              rows={3} style={ta} disabled={atendSaved}
+                              onFocus={e => (e.target.style.borderColor='#0066D0')}
+                              onBlur={e => (e.target.style.borderColor='#E5E7EB')}
+                            />
+                          </div>
+
+                          {/* A — Assessment */}
+                          <div style={fieldGrp}>
+                            <label style={fieldLbl}>{sectionBadge('A','#F59E0B')} Diagnóstico / Avaliação</label>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 140px', gap: 10 }}>
+                              <input
+                                value={atendDiag} onChange={e => setAtendDiag(e.target.value)}
+                                placeholder="Hipótese diagnóstica ou diagnóstico definitivo"
+                                disabled={atendSaved}
+                                style={{ ...ta, height: 36, padding: '0 10px', resize: 'none' } as CSSProperties}
+                                onFocus={e => (e.target.style.borderColor='#0066D0')}
+                                onBlur={e => (e.target.style.borderColor='#E5E7EB')}
+                              />
+                              <input
+                                value={atendCid} onChange={e => setAtendCid(e.target.value.toUpperCase())}
+                                placeholder="CID-10 (ex: J00)"
+                                disabled={atendSaved}
+                                style={{ ...ta, height: 36, padding: '0 10px', resize: 'none' } as CSSProperties}
+                                onFocus={e => (e.target.style.borderColor='#0066D0')}
+                                onBlur={e => (e.target.style.borderColor='#E5E7EB')}
+                              />
+                            </div>
+                          </div>
+
+                          {/* P — Plan */}
+                          <div style={fieldGrp}>
+                            <label style={fieldLbl}>{sectionBadge('P','#8B5CF6')} Conduta / Plano</label>
+                            <textarea
+                              value={atendConduta} onChange={e => setAtendConduta(e.target.value)}
+                              placeholder="Orientações, medicamentos prescritos, solicitação de exames, encaminhamentos, plano terapêutico..."
+                              rows={3} style={ta} disabled={atendSaved}
+                              onFocus={e => (e.target.style.borderColor='#0066D0')}
+                              onBlur={e => (e.target.style.borderColor='#E5E7EB')}
+                            />
+                          </div>
+
+                          {/* Retorno */}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', whiteSpace: 'nowrap' }}>📅 Retorno em:</label>
+                            <input
+                              type="date" value={atendRetorno} onChange={e => setAtendRetorno(e.target.value)}
+                              disabled={atendSaved}
+                              style={{ height: 34, border: '1.5px solid #E5E7EB', borderRadius: 7, padding: '0 10px', fontSize: 12, fontFamily: 'inherit', color: '#374151', outline: 'none' }}
+                            />
+                            {atendRetorno && <span style={{ fontSize: 11, color: '#6B7280' }}>
+                              {Math.round((new Date(atendRetorno + 'T12:00:00').getTime() - Date.now()) / 86400000)} dias
+                            </span>}
+                          </div>
+
+                          {/* Save / Saved */}
+                          {!atendSaved ? (
+                            <div style={{ display: 'flex', gap: 8, paddingTop: 4, borderTop: '1px solid #F3F4F6' }}>
+                              <button
+                                disabled={atendSaving || (!atendQueixa.trim() && !atendEvolucao.trim() && !atendDiag.trim() && !atendConduta.trim())}
+                                onClick={async () => {
+                                  if (!selected) return;
+                                  if (!atendQueixa.trim() && !atendEvolucao.trim() && !atendDiag.trim() && !atendConduta.trim()) return;
+                                  setAtendSaving(true);
+                                  const { error: atendErr } = await supabase.from('medical_records').insert({
+                                    patient_id: selected.id,
+                                    doctor_id: doctor?.id ?? null,
+                                    date: new Date().toISOString().slice(0, 10),
+                                    complaint: atendQueixa.trim() || null,
+                                    evolution: atendEvolucao.trim() || null,
+                                    diagnosis: atendDiag.trim() || null,
+                                    diagnosis_code: atendCid.trim() || null,
+                                    conduct: atendConduta.trim() || null,
+                                    return_date: atendRetorno || null,
+                                  });
+                                  if (atendErr) {
+                                    console.error('Erro ao salvar:', atendErr.message);
+                                    alert('Erro ao salvar. Tente novamente.');
+                                    setAtendSaving(false);
+                                    return;
+                                  }
+                                  await supabase.from('medical_records').select('*').eq('patient_id', selected.id).order('created_at', { ascending: false }).then(({ data }) => setRecords((data as MedicalRecord[]) ?? []));
+                                  setAtendSaving(false);
+                                  setAtendSaved(true);
+                                }}
+                                style={{
+                                  height: 36, padding: '0 20px',
+                                  background: (atendSaving || (!atendQueixa.trim() && !atendEvolucao.trim() && !atendDiag.trim() && !atendConduta.trim())) ? '#E5E7EB' : '#0066D0',
+                                  color: (atendSaving || (!atendQueixa.trim() && !atendEvolucao.trim() && !atendDiag.trim() && !atendConduta.trim())) ? '#9CA3AF' : '#fff',
+                                  border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 700,
+                                  cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 6,
+                                }}
+                              >
+                                {atendSaving ? '⏳ Salvando…' : '💾 Salvar consulta'}
+                              </button>
+                              <button
+                                onClick={() => { setActiveSection('presc'); }}
+                                style={{ height: 36, padding: '0 16px', background: '#fff', border: '1px solid #E5E7EB', borderRadius: 7, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit', color: '#374151', display: 'flex', alignItems: 'center', gap: 5 }}
+                              >
+                                💊 Ir para Prescrição
+                              </button>
+                            </div>
+                          ) : (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', background: '#F0FDF4', borderRadius: 8, border: '1px solid #BBF7D0' }}>
+                              <span style={{ fontSize: 18 }}>✅</span>
+                              <div style={{ flex: 1 }}>
+                                <div style={{ fontSize: 13, fontWeight: 700, color: '#166534' }}>Consulta salva com sucesso!</div>
+                                <div style={{ fontSize: 11, color: '#4B7B5A' }}>Registrada no histórico do paciente</div>
+                              </div>
+                              <button onClick={() => { setAtendSaved(false); setAtendQueixa(''); setAtendEvolucao(''); setAtendDiag(''); setAtendCid(''); setAtendConduta(''); setAtendRetorno(''); }}
+                                style={{ height: 30, padding: '0 12px', border: '1px solid #BBF7D0', borderRadius: 6, background: '#fff', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', color: '#166534' }}>
+                                + Nova consulta
+                              </button>
+                              <button onClick={() => setActiveSection('presc')}
+                                style={{ height: 30, padding: '0 12px', background: '#0066D0', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', color: '#fff' }}>
+                                💊 Prescrever
+                              </button>
+                            </div>
+                          )}
+
+                        </div>
+                      );
+                    })()}
+                  </Card>
+                </div>
+              )}
+
+              {activeSection === 'exames' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+
+                  {/* Quick add chips */}
+                  <Card>
+                    <div style={{ padding: '12px 16px', borderBottom: '1px solid #F3F4F6' }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: '#111827', marginBottom: 2 }}>🔬 Solicitar Exames</div>
+                      <div style={{ fontSize: 11, color: '#6B7280' }}>Clique para adicionar exames comuns ou escreva manualmente</div>
+                    </div>
+                    <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+
+                      {/* Quick add chips */}
+                      <div>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: '#6B7280', marginBottom: 6 }}>ATALHOS RÁPIDOS</div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                          {['Hemograma completo','Glicemia jejum','HbA1c','TSH / T4 livre','Colesterol total e frações','Triglicerídeos','Creatinina','TGO / TGP','Urina tipo I','Rx tórax PA','ECG','Ecocardiograma','USG abdome total','Mamografia','PSA'].map(ex => (
+                            <button
+                              key={ex}
+                              onClick={() => {
+                                const empty = examLines.findIndex(l => !l.trim());
+                                if (empty >= 0) {
+                                  setExamLines(prev => prev.map((l, i) => i === empty ? ex : l));
+                                } else {
+                                  setExamLines(prev => [...prev, ex]);
+                                }
+                              }}
+                              style={{ height: 28, padding: '0 10px', background: '#F3F4F6', border: '1px solid #E5E7EB', borderRadius: 20, fontSize: 11, color: '#374151', cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}
+                              onMouseEnter={e => { (e.currentTarget).style.background='#DBEAFE'; (e.currentTarget).style.borderColor='#93C5FD'; }}
+                              onMouseLeave={e => { (e.currentTarget).style.background='#F3F4F6'; (e.currentTarget).style.borderColor='#E5E7EB'; }}
+                            >
+                              + {ex}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Exam list */}
+                      <div>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                          <div style={{ fontSize: 11, fontWeight: 600, color: '#6B7280' }}>LISTA DE EXAMES SOLICITADOS</div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <label style={{ fontSize: 11, color: '#6B7280' }}>Prioridade:</label>
+                            <select value={examUrgency} onChange={e => setExamUrgency(e.target.value)}
+                              style={{ height: 28, padding: '0 8px', border: '1px solid #E5E7EB', borderRadius: 6, fontSize: 11, fontFamily: 'inherit', background: '#fff' }}>
+                              <option>Rotina</option>
+                              <option>Urgência</option>
+                              <option>Pré-operatório</option>
+                              <option>Controle</option>
+                            </select>
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                          {examLines.map((line, idx) => (
+                            <div key={idx} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                              <span style={{ width: 20, height: 20, borderRadius: '50%', background: '#F3F4F6', border: '1px solid #E5E7EB', fontSize: 10, fontWeight: 700, color: '#6B7280', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{idx + 1}</span>
+                              <input
+                                value={line}
+                                onChange={e => setExamLines(prev => prev.map((l, i) => i === idx ? e.target.value : l))}
+                                placeholder={`Exame ${idx + 1}`}
+                                style={{ flex: 1, height: 34, border: '1px solid #E5E7EB', borderRadius: 7, padding: '0 10px', fontSize: 13, fontFamily: 'inherit', outline: 'none', background: '#fff' }}
+                                onFocus={e => (e.target.style.borderColor='#0066D0')}
+                                onBlur={e => (e.target.style.borderColor='#E5E7EB')}
+                              />
+                              <button onClick={() => setExamLines(prev => prev.length === 1 ? [''] : prev.filter((_, i) => i !== idx))}
+                                style={{ width: 28, height: 28, border: '1px solid #FEE2E2', borderRadius: 6, background: '#FFF5F5', color: '#EF4444', fontSize: 14, cursor: 'pointer', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>×</button>
+                            </div>
+                          ))}
+                        </div>
+                        <button onClick={() => setExamLines(prev => [...prev, ''])}
+                          style={{ marginTop: 6, height: 30, padding: '0 12px', border: '1px dashed #0066D0', borderRadius: 6, background: '#EFF6FF', color: '#0066D0', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
+                          + Adicionar linha
+                        </button>
+                      </div>
+
+                      {/* Actions */}
+                      {!examSaved ? (
+                        <div style={{ display: 'flex', gap: 8, paddingTop: 4, borderTop: '1px solid #F3F4F6' }}>
+                          <button
+                            disabled={examSaving || examLines.every(l => !l.trim())}
+                            onClick={async () => {
+                              if (!selected) return;
+                              const valid = examLines.filter(l => l.trim());
+                              if (!valid.length) return;
+                              setExamSaving(true);
+                              const { error: examErr } = await supabase.from('medical_records').insert({
+                                patient_id: selected.id,
+                                doctor_id: doctor?.id ?? null,
+                                date: new Date().toISOString().slice(0, 10),
+                                conduct: `SOLICITAÇÃO DE EXAMES (${examUrgency}):\n${valid.map((e, i) => `${i + 1}. ${e}`).join('\n')}`,
+                              });
+                              if (examErr) {
+                                console.error('Erro ao salvar:', examErr.message);
+                                alert('Erro ao salvar. Tente novamente.');
+                                setExamSaving(false);
+                                return;
+                              }
+                              await supabase.from('medical_records').select('*').eq('patient_id', selected.id).order('created_at', { ascending: false }).then(({ data }) => setRecords((data as MedicalRecord[]) ?? []));
+                              setExamSaving(false);
+                              setExamSaved(true);
+                            }}
+                            style={{ height: 36, padding: '0 20px', background: examLines.every(l => !l.trim()) ? '#E5E7EB' : '#0066D0', color: examLines.every(l => !l.trim()) ? '#9CA3AF' : '#fff', border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}
+                          >
+                            {examSaving ? '⏳ Salvando…' : '💾 Salvar e Imprimir'}
+                          </button>
+                          <button onClick={() => window.print()} style={{ height: 36, padding: '0 14px', background: '#fff', border: '1px solid #E5E7EB', borderRadius: 7, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit', color: '#374151', display: 'flex', alignItems: 'center', gap: 5 }}>
+                            🖨 Imprimir
+                          </button>
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', background: '#F0FDF4', borderRadius: 8, border: '1px solid #BBF7D0' }}>
+                          <span style={{ fontSize: 18 }}>✅</span>
+                          <div style={{ flex: 1, fontSize: 13, fontWeight: 700, color: '#166534' }}>Solicitação registrada!</div>
+                          <button onClick={() => { setExamSaved(false); setExamLines(['']); }}
+                            style={{ height: 30, padding: '0 12px', border: '1px solid #BBF7D0', borderRadius: 6, background: '#fff', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', color: '#166534' }}>
+                            + Nova solicitação
+                          </button>
+                          <button onClick={() => window.print()}
+                            style={{ height: 30, padding: '0 12px', background: '#0066D0', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', color: '#fff' }}>
+                            🖨 Imprimir
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </Card>
+                </div>
+              )}
+
+              {activeSection === 'documentos' && (() => {
+                const docTypes = [
+                  { id: 'atestado',        label: '📋 Atestado Médico',      desc: 'Afastamento por dias' },
+                  { id: 'comparecimento',  label: '📅 Declaração de Comparecimento', desc: 'Consulta realizada' },
+                  { id: 'encaminhamento',  label: '📤 Encaminhamento',        desc: 'Para especialista' },
+                ];
+
+                const todayFull = new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
+                const today2 = new Date().toLocaleDateString('pt-BR');
+
+                let docContent = '';
+                if (docType === 'atestado') {
+                  docContent = `Atesto para os devidos fins que ${selected?.name}${selected?.birth_date ? `, nascido(a) em ${new Date(selected.birth_date + 'T12:00:00').toLocaleDateString('pt-BR')}` : ''}, encontra-se sob meus cuidados médicos, necessitando de afastamento de suas atividades por ${atestDias} dia(s)${atestMotivo ? `, devido a ${atestMotivo}` : ''}.`;
+                } else if (docType === 'comparecimento') {
+                  docContent = `Declaro que ${selected?.name} compareceu a esta clínica para consulta médica no dia ${today2}, no período indicado.`;
+                } else {
+                  docContent = `Encaminho para avaliação com ${encamEspec || 'especialista'}${encamMotivo ? ` o(a) paciente ${selected?.name} com queixa de ${encamMotivo}` : ` o(a) paciente ${selected?.name}`}. Solicito avaliação e conduta.`;
+                }
+
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+
+                    {/* Type selector */}
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      {docTypes.map(dt => (
+                        <button key={dt.id} onClick={() => setDocType(dt.id as any)}
+                          style={{ flex: 1, padding: '10px 12px', border: `2px solid ${docType === dt.id ? '#0066D0' : '#E5E7EB'}`, borderRadius: 8, background: docType === dt.id ? '#EFF6FF' : '#fff', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: docType === dt.id ? '#0066D0' : '#111827' }}>{dt.label}</div>
+                          <div style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }}>{dt.desc}</div>
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Form */}
+                    <Card>
+                      <div style={{ padding: '12px 16px', borderBottom: '1px solid #F3F4F6', fontSize: 13, fontWeight: 700, color: '#111827' }}>
+                        {docTypes.find(d => d.id === docType)?.label}
+                      </div>
+                      <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+
+                        {docType === 'atestado' && (
+                          <>
+                            <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: 12, alignItems: 'end' }}>
+                              <div>
+                                <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 4 }}>Dias de afastamento</label>
+                                <input type="number" min="1" value={atestDias} onChange={e => setAtestDias(e.target.value)}
+                                  style={{ width: '100%', height: 36, border: '1.5px solid #E5E7EB', borderRadius: 7, padding: '0 10px', fontSize: 13, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' }} />
+                              </div>
+                              <div>
+                                <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 4 }}>Motivo (opcional)</label>
+                                <input value={atestMotivo} onChange={e => setAtestMotivo(e.target.value)}
+                                  placeholder="Ex: estado gripal, pós-operatório, gastroenterite..."
+                                  style={{ width: '100%', height: 36, border: '1.5px solid #E5E7EB', borderRadius: 7, padding: '0 10px', fontSize: 13, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' }} />
+                              </div>
+                            </div>
+                          </>
+                        )}
+
+                        {docType === 'encaminhamento' && (
+                          <>
+                            <div>
+                              <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 4 }}>Especialidade / Médico</label>
+                              <input value={encamEspec} onChange={e => setEncamEspec(e.target.value)}
+                                placeholder="Ex: Cardiologia, Dr. João Silva"
+                                style={{ width: '100%', height: 36, border: '1.5px solid #E5E7EB', borderRadius: 7, padding: '0 10px', fontSize: 13, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' }} />
+                            </div>
+                            <div>
+                              <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 4 }}>Motivo do encaminhamento</label>
+                              <textarea value={encamMotivo} onChange={e => setEncamMotivo(e.target.value)}
+                                placeholder="Descreva brevemente o motivo clínico do encaminhamento..."
+                                rows={2}
+                                style={{ width: '100%', border: '1.5px solid #E5E7EB', borderRadius: 7, padding: '8px 10px', fontSize: 13, fontFamily: 'inherit', outline: 'none', resize: 'vertical', boxSizing: 'border-box' }} />
+                            </div>
+                          </>
+                        )}
+
+                        {/* Preview */}
+                        <div style={{ background: '#F9FAFB', border: '1px solid #E5E7EB', borderRadius: 8, padding: '16px 18px' }}>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: '#6B7280', letterSpacing: 1, marginBottom: 12, textTransform: 'uppercase' }}>Pré-visualização</div>
+                          <div style={{ textAlign: 'center', marginBottom: 16 }}>
+                            <div style={{ fontSize: 15, fontWeight: 800, color: '#111827' }}>ATESTADO MÉDICO</div>
+                            <div style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }}>{docTypes.find(d => d.id === docType)?.label.replace(/^[^\s]+ /, '')}</div>
+                          </div>
+                          <div style={{ fontSize: 13, color: '#374151', lineHeight: 1.8, marginBottom: 16 }}>
+                            {docContent}
+                          </div>
+                          <div style={{ fontSize: 12, color: '#6B7280', borderTop: '1px solid #E5E7EB', paddingTop: 12, marginTop: 8 }}>
+                            <div>{new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' })}</div>
+                            <div style={{ marginTop: 20, borderTop: '1px solid #9CA3AF', paddingTop: 4, display: 'inline-block', minWidth: 200 }}>
+                              <div style={{ fontSize: 12, fontWeight: 600, color: '#374151' }}>Dr(a). {doctor.name}</div>
+                              {doctor.specialty && <div style={{ fontSize: 11 }}>{doctor.specialty}</div>}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Print button */}
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          <button onClick={() => window.print()}
+                            style={{ height: 36, padding: '0 20px', background: '#0066D0', color: '#fff', border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 6 }}>
+                            🖨 Imprimir Documento
+                          </button>
+                          <button onClick={() => copyToClipboard(docContent)}
+                            style={{ height: 36, padding: '0 14px', background: '#fff', border: '1px solid #E5E7EB', borderRadius: 7, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit', color: '#374151' }}>
+                            📋 Copiar texto
+                          </button>
+                        </div>
+                      </div>
+                    </Card>
+                  </div>
+                );
+              })()}
+
+              {activeSection === 'imagens' && (
+                <Card>
+                  <div style={{ padding: '12px 16px', borderBottom: '1px solid #F3F4F6' }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#111827' }}>🖼️ Imagens e Anexos</div>
+                    <div style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }}>Laudos, exames de imagem e outros arquivos do paciente</div>
+                  </div>
+                  <div style={{ padding: '32px 24px', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
+                    <div style={{ width: 64, height: 64, borderRadius: 16, background: '#F3F4F6', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28 }}>📎</div>
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>Nenhum arquivo anexado</div>
+                      <div style={{ fontSize: 12, color: '#9CA3AF', marginTop: 4 }}>Em breve: upload de imagens DICOM, laudos e PDFs</div>
+                    </div>
+                    <div style={{ padding: '12px 20px', background: '#F9FAFB', border: '1px dashed #D1D5DB', borderRadius: 10, maxWidth: 360 }}>
+                      <div style={{ fontSize: 11, color: '#9CA3AF' }}>
+                        💡 <strong>Dica:</strong> Para ativar o armazenamento de arquivos, configure o Supabase Storage no painel do projeto e habilite o bucket <code style={{ background: '#E5E7EB', padding: '1px 4px', borderRadius: 3 }}>patient-files</code>.
+                      </div>
+                    </div>
+                  </div>
                 </Card>
               )}
 
@@ -2335,8 +4027,442 @@ function Prontuario({ initialPatientId }: { initialPatientId?: string }) {
             <div style={{ textAlign: 'center', color: '#9CA3AF', padding: 60, fontSize: 13 }}>Nenhum paciente selecionado</div>
           )}
         </div>{/* end scroll area */}
+
+        {/* ── MedFlow AI Bar (aparece durante o atendimento) ── */}
+        {timerActive && (
+          <div style={{ flexShrink: 0, borderTop: '1px solid #E5E7EB' }}>
+            {/* Tira de notificação teal */}
+            <div style={{
+              background: 'linear-gradient(90deg,#0D9488 0%,#0891B2 100%)',
+              padding: '6px 16px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+            }}>
+              <span style={{ fontSize: 11, color: '#fff', fontWeight: 600, letterSpacing: 0.3 }}>
+                ✨ MedFlow AI · Assistente de Prontuário ativo — clique em &quot;Iniciar Registro&quot; para ditar o atendimento
+              </span>
+            </div>
+            {/* Barra principal */}
+            <div style={{
+              background: '#fff', padding: '8px 12px',
+              display: 'flex', alignItems: 'center', gap: 10,
+            }}>
+              {/* Ícone robô */}
+              <div style={{
+                width: 32, height: 32, borderRadius: 8, flexShrink: 0,
+                background: 'linear-gradient(135deg,#0D9488 0%,#0891B2 100%)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                <span style={{ fontSize: 16 }}>🤖</span>
+              </div>
+              <span style={{ fontSize: 13, fontWeight: 600, color: '#111827', flex: 1 }}>
+                Assistente de IA
+              </span>
+              {/* Especialidade */}
+              <select
+                value={aiSpecialty}
+                onChange={e => setAiSpecialty(e.target.value)}
+                style={{
+                  height: 30, padding: '0 10px', border: '1px solid #E5E7EB',
+                  borderRadius: 6, fontSize: 12, color: '#374151',
+                  background: '#fff', fontFamily: 'inherit', cursor: 'pointer',
+                }}
+              >
+                {['Generalista','Cardiologia','Pediatria','Ginecologia','Ortopedia','Neurologia','Dermatologia','Endocrinologia'].map(s => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+              {/* Botão principal */}
+              <button
+                onClick={() => { setAiRelato(''); setAiResult(''); setShowAiModal(true); }}
+                style={{
+                  height: 34, padding: '0 14px',
+                  background: 'linear-gradient(135deg,#0D9488 0%,#0891B2 100%)',
+                  color: '#fff', border: 'none', borderRadius: 7,
+                  fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                  fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 6,
+                }}
+              >
+                <span style={{ fontSize: 14 }}>🎤</span> Iniciar Registro
+              </button>
+              {/* Menu ⋮ */}
+              <button style={{
+                width: 30, height: 30, background: 'none', border: '1px solid #E5E7EB',
+                borderRadius: 6, cursor: 'pointer', fontSize: 16, color: '#6B7280',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>⋮</button>
+            </div>
+            {/* Aviso legal */}
+            <div style={{ background: '#F9FAFB', padding: '4px 16px', borderTop: '1px solid #F3F4F6' }}>
+              <span style={{ fontSize: 10, color: '#9CA3AF' }}>
+                Ao usar o MedFlow AI, você concorda com os{' '}
+                <span style={{ color: '#0891B2', cursor: 'pointer' }}>termos de uso</span>{' '}
+                e a{' '}
+                <span style={{ color: '#0891B2', cursor: 'pointer' }}>política de privacidade</span>.
+              </span>
+            </div>
+          </div>
+        )}
       </div>{/* end main content */}
     </div>{/* end two-column */}
+
+    {/* ── Modal edição de anamnese ── */}
+    {anamEditIdx !== null && (
+      <div
+        style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,.35)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999,
+        }}
+        onClick={e => e.target === e.currentTarget && !anamSaving && setAnamEditIdx(null)}
+      >
+        <div style={{
+          background: '#fff', borderRadius: 12, width: 420, maxWidth: '94vw',
+          boxShadow: '0 20px 60px rgba(0,0,0,.2)', overflow: 'hidden',
+        }}>
+          {/* Header */}
+          <div style={{
+            padding: '14px 18px', borderBottom: '1px solid #F3F4F6',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          }}>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: '#111827' }}>
+                {anamnesisTitles[anamEditIdx]}
+              </div>
+              <div style={{ fontSize: 11, color: '#9CA3AF', marginTop: 1 }}>
+                {selected?.name}
+              </div>
+            </div>
+            <button
+              onClick={() => !anamSaving && setAnamEditIdx(null)}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9CA3AF', fontSize: 20, lineHeight: 1 }}
+            >×</button>
+          </div>
+
+          {/* Body */}
+          <div style={{ padding: '16px 18px' }}>
+            <textarea
+              value={anamEditVal}
+              onChange={e => setAnamEditVal(e.target.value)}
+              autoFocus
+              placeholder={`Digite as informações de ${anamnesisTitles[anamEditIdx ?? 0].toLowerCase()}…`}
+              style={{
+                width: '100%', minHeight: 120, border: '1.5px solid #D1D5DB',
+                borderRadius: 8, padding: '10px 12px', fontSize: 13,
+                fontFamily: 'inherit', color: '#111827', resize: 'vertical',
+                outline: 'none', lineHeight: 1.6, boxSizing: 'border-box',
+              }}
+              onFocus={e => (e.target.style.borderColor = '#0066D0')}
+              onBlur={e => (e.target.style.borderColor = '#D1D5DB')}
+            />
+          </div>
+
+          {/* Footer */}
+          <div style={{
+            padding: '10px 18px 14px', display: 'flex', justifyContent: 'flex-end', gap: 8,
+          }}>
+            <button
+              onClick={() => { setAnamEditIdx(null); setAnamEditVal(''); }}
+              disabled={anamSaving}
+              style={{
+                height: 34, padding: '0 16px', border: '1px solid #E5E7EB',
+                borderRadius: 7, background: '#fff', fontSize: 13,
+                cursor: 'pointer', fontFamily: 'inherit', color: '#374151',
+              }}
+            >Cancelar</button>
+            <button
+              disabled={anamSaving}
+              onClick={async () => {
+                if (!selected || anamEditIdx === null) return;
+                setAnamSaving(true);
+                const field = anamKeys[anamEditIdx];
+                const val   = anamEditVal.trim() || null;
+
+                if (rec0?.id && (rec0 as any).type === 'anamnesis') {
+                  // Atualiza o registro de anamnese dedicado
+                  await supabase.from('medical_records').update({ [field]: val }).eq('id', rec0.id);
+                } else if (rec0?.id && (rec0.clinical_history || rec0.surgical_history || rec0.family_history || rec0.habits || rec0.allergies || (rec0 as any).medications)) {
+                  // Já existe um registro com campos de anamnese (migração): atualiza somente campos de anamnese
+                  await supabase.from('medical_records').update({ [field]: val }).eq('id', rec0.id);
+                } else {
+                  // Cria registro de anamnese dedicado (não sobrescreve consultas)
+                  await supabase.from('medical_records').insert({
+                    patient_id: selected.id,
+                    type: 'anamnesis',
+                    date: new Date().toISOString().slice(0, 10),
+                    [field]: val,
+                  });
+                }
+                await supabase.from('medical_records').select('*').eq('patient_id', selected.id).order('created_at', { ascending: false }).then(({ data }) => setRecords((data as MedicalRecord[]) ?? []));
+                setAnamSaving(false);
+                setAnamEditIdx(null);
+                setAnamEditVal('');
+              }}
+              style={{
+                height: 34, padding: '0 20px',
+                background: anamSaving ? '#E5E7EB' : '#0066D0',
+                color: anamSaving ? '#9CA3AF' : '#fff',
+                border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 700,
+                cursor: anamSaving ? 'default' : 'pointer', fontFamily: 'inherit',
+              }}
+            >
+              {anamSaving ? 'Salvando…' : 'Salvar'}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* ── Modal IA Prontuário ── */}
+    {showAiModal && (
+      <div style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999,
+      }} onClick={e => { if (e.target === e.currentTarget && !aiLoading) { stopRecording(); setShowAiModal(false); } }}>
+        <div style={{
+          background: '#fff', borderRadius: 14, width: 620, maxWidth: '95vw',
+          maxHeight: '90vh', display: 'flex', flexDirection: 'column',
+          boxShadow: '0 24px 80px rgba(0,0,0,.25)',
+          overflow: 'hidden',
+        }}>
+          {/* Header */}
+          <div style={{
+            background: 'linear-gradient(135deg,#0D9488 0%,#0891B2 100%)',
+            padding: '14px 20px', display: 'flex', alignItems: 'center', gap: 10,
+          }}>
+            <div style={{
+              width: 36, height: 36, borderRadius: 9, background: 'rgba(255,255,255,.2)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20,
+            }}>🤖</div>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: '#fff' }}>MedFlow AI · Redação de Prontuário</div>
+              <div style={{ fontSize: 11, color: 'rgba(255,255,255,.8)' }}>
+                Especialidade: {aiSpecialty} · Formato SOAP
+              </div>
+            </div>
+            <button onClick={() => { if (!aiLoading) { stopRecording(); setShowAiModal(false); } }} style={{
+              marginLeft: 'auto', background: 'rgba(255,255,255,.2)', border: 'none',
+              borderRadius: 6, width: 28, height: 28, cursor: 'pointer', color: '#fff',
+              fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>×</button>
+          </div>
+
+          <div style={{ flex: 1, overflowY: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 14 }}>
+            {/* Input */}
+            {!aiResult && (
+              <>
+                <div>
+                  {/* Label + botão mic */}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: '#374151' }}>
+                      Descreva o atendimento livremente:
+                    </div>
+                    <button
+                      onClick={isRecording ? stopRecording : startRecording}
+                      title={isRecording ? 'Parar gravação' : 'Gravar por voz'}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 6,
+                        height: 32, padding: '0 12px',
+                        background: isRecording
+                          ? 'linear-gradient(135deg,#DC2626,#EF4444)'
+                          : 'linear-gradient(135deg,#0D9488,#0891B2)',
+                        color: '#fff', border: 'none', borderRadius: 7,
+                        fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                        fontFamily: 'inherit',
+                        boxShadow: isRecording ? '0 0 0 3px rgba(220,38,38,.25)' : 'none',
+                        transition: 'all .2s',
+                      }}
+                    >
+                      {/* Ícone microfone SVG */}
+                      <svg width={13} height={13} viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="9" y="2" width="6" height="11" rx="3"/>
+                        <path d="M5 10a7 7 0 0 0 14 0"/>
+                        <line x1="12" y1="19" x2="12" y2="22"/>
+                        <line x1="8" y1="22" x2="16" y2="22"/>
+                      </svg>
+                      {isRecording ? 'Parar' : 'Gravar voz'}
+                      {/* Bolinha pulsando quando grava */}
+                      {isRecording && (
+                        <span style={{
+                          width: 7, height: 7, borderRadius: '50%', background: '#fff',
+                          animation: 'aiPulse 1s infinite',
+                          display: 'inline-block',
+                        }}/>
+                      )}
+                    </button>
+                  </div>
+
+                  {/* Área de texto com borda vermelha quando grava */}
+                  <div style={{ position: 'relative' }}>
+                    <textarea
+                      value={aiRelato}
+                      onChange={e => setAiRelato(e.target.value)}
+                      placeholder={isRecording
+                        ? 'Fale agora… o texto aparece aqui em tempo real.'
+                        : 'Exemplos:\n• "Paciente 45 anos, dor torácica há 2 dias, PA 140/90, FC 88bpm…"\n• "Criança 6 anos com febre 38.8°C, tosse produtiva, orofaringe hiperemiada…"'}
+                      style={{
+                        width: '100%', minHeight: 140,
+                        border: `1.5px solid ${isRecording ? '#EF4444' : '#D1D5DB'}`,
+                        borderRadius: 8, padding: '10px 12px', fontSize: 13,
+                        fontFamily: 'inherit', color: '#111827', resize: 'vertical',
+                        outline: 'none', lineHeight: 1.5, boxSizing: 'border-box',
+                        background: isRecording ? '#FFF5F5' : '#fff',
+                        transition: 'border-color .2s, background .2s',
+                      }}
+                      autoFocus={!isRecording}
+                    />
+                    {/* Texto interim (o que o usuário está falando agora) */}
+                    {aiInterim && (
+                      <div style={{
+                        position: 'absolute', bottom: 10, left: 12, right: 12,
+                        fontSize: 12, color: '#EF4444', fontStyle: 'italic',
+                        pointerEvents: 'none',
+                      }}>
+                        {aiInterim}…
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Status de gravação */}
+                  {isRecording && (
+                    <div style={{
+                      display: 'flex', alignItems: 'center', gap: 6, marginTop: 6,
+                      fontSize: 11, color: '#DC2626', fontWeight: 600,
+                    }}>
+                      <span style={{
+                        width: 7, height: 7, borderRadius: '50%', background: '#EF4444',
+                        display: 'inline-block', animation: 'aiPulse 1s infinite',
+                      }}/>
+                      Gravando… fale normalmente em português
+                    </div>
+                  )}
+                </div>
+
+                {/* Keyframe de pulsação */}
+                <style>{`
+                  @keyframes aiPulse {
+                    0%, 100% { opacity: 1; transform: scale(1); }
+                    50% { opacity: 0.4; transform: scale(0.8); }
+                  }
+                `}</style>
+
+                {selected && (
+                  <div style={{ fontSize: 11, color: '#6B7280', background: '#F9FAFB', borderRadius: 6, padding: '6px 10px' }}>
+                    👤 Paciente: <strong>{selected.name}</strong>
+                    {selected.birth_date && ` · ${calcAgeDetailed(selected.birth_date)}`}
+                    {(selected as any).gender && ` · ${(selected as any).gender === 'M' ? 'Masculino' : 'Feminino'}`}
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* Resultado */}
+            {aiResult && (
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#0D9488' }}>✅ Prontuário SOAP gerado</div>
+                  <button onClick={() => { setAiResult(''); setAiRelato(''); }} style={{
+                    height: 26, padding: '0 10px', border: '1px solid #E5E7EB', borderRadius: 5,
+                    background: '#fff', fontSize: 11, cursor: 'pointer', color: '#6B7280', fontFamily: 'inherit',
+                  }}>↩ Novo relato</button>
+                </div>
+                <div style={{
+                  background: '#F9FAFB', border: '1px solid #E5E7EB', borderRadius: 8,
+                  padding: '14px 16px', fontSize: 13, color: '#111827', lineHeight: 1.7,
+                  whiteSpace: 'pre-wrap', fontFamily: 'inherit',
+                }}>
+                  {aiResult}
+                </div>
+              </div>
+            )}
+
+            {/* Loading */}
+            {aiLoading && (
+              <div style={{
+                display: 'flex', flexDirection: 'column', alignItems: 'center',
+                justifyContent: 'center', gap: 12, padding: '32px 0',
+              }}>
+                <div style={{
+                  width: 48, height: 48, borderRadius: '50%',
+                  background: 'linear-gradient(135deg,#0D9488,#0891B2)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 24,
+                  animation: 'pulse 1.5s infinite',
+                }}>🤖</div>
+                <div style={{ fontSize: 13, color: '#0D9488', fontWeight: 600 }}>Redigindo prontuário SOAP…</div>
+                <div style={{ fontSize: 11, color: '#9CA3AF' }}>Isso leva apenas alguns segundos</div>
+              </div>
+            )}
+          </div>
+
+          {/* Footer */}
+          <div style={{
+            padding: '12px 20px', borderTop: '1px solid #F3F4F6',
+            display: 'flex', gap: 8, justifyContent: 'flex-end', background: '#fff',
+          }}>
+            {!aiResult && !aiLoading && (
+              <>
+                <button onClick={() => setShowAiModal(false)} style={{
+                  height: 36, padding: '0 16px', border: '1px solid #E5E7EB',
+                  borderRadius: 7, background: '#fff', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit',
+                }}>Cancelar</button>
+                <button
+                  disabled={!aiRelato.trim()}
+                  onClick={async () => {
+                    if (!aiRelato.trim()) return;
+                    setAiLoading(true);
+                    try {
+                      const res = await fetch('/api/ai-prontuario', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          relato: aiRelato,
+                          patientName: selected?.name,
+                          specialty: aiSpecialty,
+                        }),
+                      });
+                      const data = await res.json();
+                      if (data.result) setAiResult(data.result);
+                      else setAiResult('Erro ao gerar prontuário. Verifique a chave da API.');
+                    } catch {
+                      setAiResult('Erro de conexão com o servidor.');
+                    }
+                    setAiLoading(false);
+                  }}
+                  style={{
+                    height: 36, padding: '0 20px',
+                    background: aiRelato.trim() ? 'linear-gradient(135deg,#0D9488 0%,#0891B2 100%)' : '#E5E7EB',
+                    color: aiRelato.trim() ? '#fff' : '#9CA3AF',
+                    border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 700,
+                    cursor: aiRelato.trim() ? 'pointer' : 'default',
+                    fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 6,
+                  }}
+                >
+                  ✨ Gerar Prontuário SOAP
+                </button>
+              </>
+            )}
+            {aiResult && !aiLoading && (
+              <>
+                <button onClick={() => copyToClipboard(aiResult)} style={{
+                  height: 36, padding: '0 14px', border: '1px solid #E5E7EB',
+                  borderRadius: 7, background: '#fff', fontSize: 13, cursor: 'pointer',
+                  fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 5,
+                }}>📋 Copiar</button>
+                <button onClick={() => {
+                  setShowAiModal(false);
+                  setShowConsulta(true);
+                }} style={{
+                  height: 36, padding: '0 16px',
+                  background: 'linear-gradient(135deg,#0D9488 0%,#0891B2 100%)',
+                  color: '#fff', border: 'none', borderRadius: 7,
+                  fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
+                  display: 'flex', alignItems: 'center', gap: 5,
+                }}>📝 Usar no Prontuário</button>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    )}
 
     {/* ── Modals (portals over everything) ── */}
     {showConsulta && selected && (
@@ -2354,11 +4480,939 @@ function Prontuario({ initialPatientId }: { initialPatientId?: string }) {
       }} />
     )}
     {showCreatePresc && selected && (
-      <NovaPrescricaoModal patient={selected} onClose={() => setShowCreatePresc(false)} onSaved={() => {
-        supabase.from('prescriptions').select('*').eq('patient_id', selected.id).order('created_at', { ascending: false }).then(({ data }) => setPrescriptions((data as Prescription[]) ?? []));
+      <NovaPrescricaoModal
+        patient={selected}
+        initialItems={pendingModelItems ?? undefined}
+        onClose={() => { setShowCreatePresc(false); setPendingModelItems(null); }}
+        onSaved={() => {
+          setPendingModelItems(null);
+          supabase.from('prescriptions').select('*').eq('patient_id', selected.id).order('created_at', { ascending: false }).then(({ data }) => setPrescriptions((data as Prescription[]) ?? []));
+        }}
+      />
+    )}
+
+    {/* Adicionar paciente direto do prontuário */}
+    {showAddPtInList && (
+      <AddPatientModal onClose={() => setShowAddPtInList(false)} onSaved={() => {
+        setShowAddPtInList(false);
+        supabase.from('patients').select('*').eq('active', true).order('name')
+          .then(({ data }) => setPatients((data as Patient[]) ?? []));
       }} />
     )}
+
+    {/* Modal: selecionar modelo de prescrição */}
+    {showModelPicker && (
+      <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.4)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:9999 }}
+        onClick={e => e.target === e.currentTarget && setShowModelPicker(false)}>
+        <div style={{ background:'#fff', borderRadius:12, width:420, maxHeight:'80vh', display:'flex', flexDirection:'column', boxShadow:'0 20px 60px rgba(0,0,0,.2)', overflow:'hidden' }}>
+          <div style={{ padding:'14px 18px', borderBottom:'1px solid #F3F4F6', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+            <div style={{ fontSize:14, fontWeight:700, color:'#111827' }}>Selecionar Modelo de Prescrição</div>
+            <button onClick={() => setShowModelPicker(false)} style={{ background:'none', border:'none', cursor:'pointer', color:'#9CA3AF', fontSize:20 }}>×</button>
+          </div>
+          <div style={{ flex:1, overflowY:'auto', padding:'12px 16px', display:'flex', flexDirection:'column', gap:8 }}>
+            {prescModels.length === 0 ? (
+              <div style={{ textAlign:'center', color:'#9CA3AF', fontSize:13, padding:'24px 0' }}>
+                Nenhum modelo cadastrado.<br />
+                <button onClick={() => { setShowModelPicker(false); setShowAddModel(true); }} style={{ marginTop:8, color:'#0066D0', background:'none', border:'none', cursor:'pointer', fontSize:13, fontFamily:'inherit' }}>+ Criar primeiro modelo</button>
+              </div>
+            ) : prescModels.map(m => (
+              <div key={m.id} style={{ padding:'10px 12px', border:'1px solid #E5E7EB', borderRadius:8, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                <div>
+                  <div style={{ fontSize:13, fontWeight:600, color:'#111827' }}>{m.name}</div>
+                  <div style={{ fontSize:11, color:'#6B7280' }}>{m.items.length} medicamento(s)</div>
+                </div>
+                <button onClick={() => { setPendingModelItems(m.items.map((it: any) => ({ med: it.med ?? it.medication ?? '', dose: it.dose ?? it.dosage ?? '', freq: it.freq ?? it.frequency ?? '', dur: it.dur ?? it.duration ?? '' }))); setShowModelPicker(false); setShowCreatePresc(true); }} style={{ height:30, padding:'0 12px', background:'#0066D0', color:'#fff', border:'none', borderRadius:6, fontSize:12, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>Usar</button>
+              </div>
+            ))}
+          </div>
+          <div style={{ padding:'10px 16px', borderTop:'1px solid #F3F4F6' }}>
+            <button onClick={() => { setShowModelPicker(false); setShowAddModel(true); }} style={{ width:'100%', height:34, border:'1.5px dashed #0066D0', borderRadius:7, background:'#EFF6FF', color:'#0066D0', fontSize:13, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>+ Criar novo modelo</button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* Modal: adicionar modelo de prescrição */}
+    {showAddModel && (
+      <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.4)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:9999 }}
+        onClick={e => e.target === e.currentTarget && setShowAddModel(false)}>
+        <div style={{ background:'#fff', borderRadius:12, width:400, boxShadow:'0 20px 60px rgba(0,0,0,.2)', overflow:'hidden' }}>
+          <div style={{ padding:'14px 18px', borderBottom:'1px solid #F3F4F6', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+            <div style={{ fontSize:14, fontWeight:700, color:'#111827' }}>Salvar como Modelo</div>
+            <button onClick={() => setShowAddModel(false)} style={{ background:'none', border:'none', cursor:'pointer', color:'#9CA3AF', fontSize:20 }}>×</button>
+          </div>
+          <div style={{ padding:'16px 18px', display:'flex', flexDirection:'column', gap:12 }}>
+            <div>
+              <div style={{ fontSize:12, fontWeight:500, color:'#374151', marginBottom:4 }}>Nome do modelo</div>
+              <input value={newModelName} onChange={e => setNewModelName(e.target.value)} placeholder="Ex: Hipertensão leve, Gripe adulto..." autoFocus
+                style={{ width:'100%', height:36, border:'1.5px solid #D1D5DB', borderRadius:7, padding:'0 10px', fontSize:13, fontFamily:'inherit', outline:'none', boxSizing:'border-box' }}
+                onFocus={e => (e.target.style.borderColor='#0066D0')} onBlur={e => (e.target.style.borderColor='#D1D5DB')}
+              />
+            </div>
+            <div style={{ fontSize:12, color:'#6B7280' }}>O modelo será salvo vazio. Você pode criar uma prescrição e salvar como modelo a seguir.</div>
+          </div>
+          <div style={{ padding:'10px 18px 16px', display:'flex', justifyContent:'flex-end', gap:8 }}>
+            <button onClick={() => { setShowAddModel(false); setNewModelName(''); }} style={{ height:34, padding:'0 16px', border:'1px solid #E5E7EB', borderRadius:7, background:'#fff', fontSize:13, cursor:'pointer', fontFamily:'inherit' }}>Cancelar</button>
+            <button disabled={!newModelName.trim()} onClick={async () => {
+              if (!newModelName.trim()) return;
+              const { data } = await supabase.from('prescription_models').insert({ name: newModelName.trim(), items: [] }).select('*').single();
+              if (data) setPrescModels(prev => [...prev, { id: data.id, name: data.name, items: [] }]);
+              setShowAddModel(false); setNewModelName('');
+            }} style={{ height:34, padding:'0 20px', background: newModelName.trim()?'#0066D0':'#E5E7EB', color: newModelName.trim()?'#fff':'#9CA3AF', border:'none', borderRadius:7, fontSize:13, fontWeight:700, cursor: newModelName.trim()?'pointer':'default', fontFamily:'inherit' }}>Salvar</button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* Modal: gerenciar modelos */}
+    {showManageModels && (
+      <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.4)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:9999 }}
+        onClick={e => e.target === e.currentTarget && setShowManageModels(false)}>
+        <div style={{ background:'#fff', borderRadius:12, width:440, maxHeight:'80vh', display:'flex', flexDirection:'column', boxShadow:'0 20px 60px rgba(0,0,0,.2)', overflow:'hidden' }}>
+          <div style={{ padding:'14px 18px', borderBottom:'1px solid #F3F4F6', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+            <div style={{ fontSize:14, fontWeight:700, color:'#111827' }}>Gerenciar Modelos de Prescrição</div>
+            <button onClick={() => setShowManageModels(false)} style={{ background:'none', border:'none', cursor:'pointer', color:'#9CA3AF', fontSize:20 }}>×</button>
+          </div>
+          <div style={{ flex:1, overflowY:'auto', padding:'12px 16px', display:'flex', flexDirection:'column', gap:8 }}>
+            {prescModels.length === 0 ? (
+              <div style={{ textAlign:'center', color:'#9CA3AF', fontSize:13, padding:'24px 0' }}>Nenhum modelo cadastrado.</div>
+            ) : prescModels.map(m => (
+              <div key={m.id} style={{ padding:'10px 12px', border:'1px solid #E5E7EB', borderRadius:8, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                <div>
+                  <div style={{ fontSize:13, fontWeight:600, color:'#111827' }}>{m.name}</div>
+                  <div style={{ fontSize:11, color:'#6B7280' }}>{m.items.length} medicamento(s)</div>
+                </div>
+                <button onClick={async () => {
+                  if (!window.confirm(`Excluir modelo "${m.name}"?`)) return;
+                  await supabase.from('prescription_models').delete().eq('id', m.id);
+                  setPrescModels(prev => prev.filter(x => x.id !== m.id));
+                }} style={{ height:28, padding:'0 10px', background:'#FEF2F2', color:'#EF4444', border:'1px solid #FECACA', borderRadius:6, fontSize:12, cursor:'pointer', fontFamily:'inherit' }}>Excluir</button>
+              </div>
+            ))}
+          </div>
+          <div style={{ padding:'10px 16px', borderTop:'1px solid #F3F4F6' }}>
+            <button onClick={() => { setShowManageModels(false); setShowAddModel(true); }} style={{ width:'100%', height:34, border:'1.5px dashed #0066D0', borderRadius:7, background:'#EFF6FF', color:'#0066D0', fontSize:13, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>+ Criar novo modelo</button>
+          </div>
+        </div>
+      </div>
+    )}
     </>
+  );
+}
+
+/* ─────────────────────────────────────────
+   APPOINTMENT DETAIL MODAL
+───────────────────────────────────────── */
+const STATUS_LABEL: Record<string, string> = {
+  em_atendimento: 'Em atendimento', aguardando: 'Aguardando', confirmado: 'Confirmado',
+  agendado: 'Agendado', concluido: 'Concluído', faltou: 'Faltou', cancelado: 'Cancelado',
+};
+const TYPE_LABEL: Record<string, string> = {
+  consulta: 'Consulta', retorno: 'Retorno', primeira_consulta: 'Primeira Consulta',
+  avaliacao: 'Avaliação', exame: 'Exame', procedimento: 'Procedimento', teleconsulta: 'Teleconsulta',
+};
+
+function AppointmentDetailModal({
+  appt, onClose, onStatusChange, onStartAtendimento,
+}: {
+  appt: Appointment;
+  onClose: () => void;
+  onStatusChange: (id: string, status: string) => void;
+  onStartAtendimento: (appt: Appointment) => void;
+}) {
+  const doctor    = React.useContext(DoctorContext);
+  const [visible, setVisible] = useState(false);
+  const [leaving, setLeaving] = useState(false);
+
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => setVisible(true));
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  const close = () => {
+    setLeaving(true);
+    setTimeout(onClose, 160);
+  };
+
+  const sc   = STATUS_COLORS[appt.status] ?? { bg: '#F3F4F6', color: '#6B7280' };
+  const show = visible && !leaving;
+
+  const dateStr = new Date(appt.date + 'T12:00:00').toLocaleDateString('pt-BR', {
+    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+  });
+  const timeStr = `${appt.start_time?.slice(0, 5)} – ${appt.end_time?.slice(0, 5)}`;
+  const phone   = appt.patients?.phone ?? '';
+  const waHref  = phone ? `https://wa.me/55${phone.replace(/\D/g, '')}` : null;
+  const canStart = !['concluido', 'cancelado', 'faltou', 'em_atendimento'].includes(appt.status);
+
+  const handleCancel = async () => {
+    onStatusChange(appt.id, 'cancelado');
+    await supabase.from('appointments').update({ status: 'cancelado' }).eq('id', appt.id);
+    close();
+  };
+
+  const bdr: CSSProperties = {
+    position: 'fixed', inset: 0, zIndex: 500,
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    background: show ? 'rgba(10,14,30,.52)' : 'rgba(10,14,30,0)',
+    backdropFilter: show ? 'blur(5px)' : 'blur(0px)',
+    transition: 'background 180ms ease, backdrop-filter 180ms ease',
+  };
+  const box: CSSProperties = {
+    width: 428, background: '#fff', borderRadius: 18,
+    boxShadow: '0 32px 80px rgba(0,0,0,.22), 0 2px 8px rgba(0,0,0,.06)',
+    overflow: 'hidden',
+    transform: show ? 'scale(1) translateY(0)' : 'scale(0.95) translateY(8px)',
+    opacity: show ? 1 : 0,
+    transition: 'transform 160ms cubic-bezier(.22,1,.36,1), opacity 160ms ease',
+  };
+
+  return (
+    <div style={bdr} onClick={e => e.target === e.currentTarget && close()}>
+      <div style={box}>
+
+        {/* ── Header ── */}
+        <div style={{
+          padding: '20px 20px 14px',
+          background: `linear-gradient(135deg, ${sc.bg} 0%, #fff 55%)`,
+          borderBottom: '1px solid #F3F4F6',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 20, fontWeight: 800, color: '#0F1626', lineHeight: 1.15,
+                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {appt.patients?.name ?? 'Paciente'}
+              </div>
+              <div style={{ fontSize: 12, color: '#6B7280', marginTop: 4 }}>
+                {TYPE_LABEL[appt.type] ?? appt.type}
+              </div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+              <span style={{
+                padding: '4px 12px', borderRadius: 20,
+                background: sc.bg, color: sc.color,
+                fontSize: 11, fontWeight: 700, letterSpacing: '.02em',
+              }}>
+                {STATUS_LABEL[appt.status] ?? appt.status}
+              </span>
+              <button onClick={close} style={{
+                width: 30, height: 30, border: 'none', background: 'rgba(0,0,0,.06)',
+                borderRadius: 8, cursor: 'pointer', fontSize: 18, color: '#6B7280',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontFamily: 'inherit',
+              }}>×</button>
+            </div>
+          </div>
+        </div>
+
+        {/* ── Info grid ── */}
+        <div style={{ padding: '16px 20px 12px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', rowGap: 14, columnGap: 20 }}>
+            {([
+              { k: 'Data',         v: dateStr },
+              { k: 'Horário',      v: timeStr },
+              { k: 'Profissional', v: doctor.name },
+              { k: 'Convênio',     v: appt.insurance || 'Particular' },
+            ] as { k: string; v: string }[]).map(({ k, v }) => (
+              <div key={k}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: '#9CA3AF',
+                  textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 3 }}>{k}</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: '#111827', lineHeight: 1.3 }}>{v}</div>
+              </div>
+            ))}
+          </div>
+
+          {appt.notes && (
+            <div style={{ marginTop: 14, padding: '10px 14px', background: '#F8F9FB',
+              borderRadius: 9, borderLeft: '3px solid #DBEAFE' }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: '#9CA3AF',
+                textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 4 }}>Observações</div>
+              <div style={{ fontSize: 12, color: '#374151', lineHeight: 1.6 }}>{appt.notes}</div>
+            </div>
+          )}
+        </div>
+
+        {/* ── Status quick-change ── */}
+        <div style={{ padding: '0 20px 14px', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {(['aguardando','confirmado','em_atendimento','concluido','faltou'] as const).map(s => {
+            const active = appt.status === s;
+            const c = STATUS_COLORS[s] ?? { bg: '#F3F4F6', color: '#6B7280' };
+            return (
+              <button key={s} onClick={async () => {
+                if (active) return;
+                if (s === 'faltou' && !window.confirm('Marcar como faltou?')) return;
+                onStatusChange(appt.id, s);
+                await supabase.from('appointments').update({ status: s }).eq('id', appt.id);
+              }} style={{
+                height: 26, padding: '0 10px', borderRadius: 20, fontFamily: 'inherit',
+                border: active ? `1.5px solid ${c.color}` : '1px solid #E5E7EB',
+                background: active ? c.bg : '#fff',
+                color: active ? c.color : '#6B7280',
+                fontSize: 11, fontWeight: active ? 700 : 500, cursor: active ? 'default' : 'pointer',
+                transition: 'all .12s',
+              }}>
+                {STATUS_LABEL[s]}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* ── Actions ── */}
+        <div style={{ padding: '12px 20px 20px', borderTop: '1px solid #F3F4F6',
+          display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {canStart && (
+            <button onClick={() => onStartAtendimento(appt)} style={{
+              width: '100%', height: 46, background: 'linear-gradient(135deg,#0055C8,#0077F5)',
+              color: '#fff', border: 'none', borderRadius: 11, fontSize: 14, fontWeight: 700,
+              cursor: 'pointer', fontFamily: 'inherit', letterSpacing: '.01em',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
+              boxShadow: '0 4px 14px rgba(0,102,208,.35)',
+            }}>
+              <span style={{ fontSize: 16 }}>▶</span> Iniciar Atendimento
+            </button>
+          )}
+          <div style={{ display: 'flex', gap: 8 }}>
+            {waHref && (
+              <a href={waHref} target="_blank" rel="noopener noreferrer" style={{
+                flex: 1, height: 38, background: '#D1FAE5', color: '#065F46',
+                border: '1px solid #A7F3D0', borderRadius: 9, fontSize: 13, fontWeight: 600,
+                cursor: 'pointer', fontFamily: 'inherit', textDecoration: 'none',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+              }}>
+                💬 WhatsApp
+              </a>
+            )}
+            {!['cancelado','concluido'].includes(appt.status) && (
+              <button onClick={handleCancel} style={{
+                flex: 1, height: 38, background: '#FFF5F5', color: '#EF4444',
+                border: '1px solid #FECACA', borderRadius: 9, fontSize: 13, fontWeight: 600,
+                cursor: 'pointer', fontFamily: 'inherit',
+              }}>
+                Cancelar
+              </button>
+            )}
+            {!waHref && !['cancelado','concluido'].includes(appt.status) === false && (
+              <button onClick={close} style={{
+                flex: 1, height: 38, background: '#F9FAFB', color: '#374151',
+                border: '1px solid #E5E7EB', borderRadius: 9, fontSize: 13, fontWeight: 500,
+                cursor: 'pointer', fontFamily: 'inherit',
+              }}>
+                Fechar
+              </button>
+            )}
+          </div>
+        </div>
+
+      </div>
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────
+   EHR ATENDIMENTO — layout 3 colunas
+   Usado tanto pela Agenda (appt) quanto
+   pelo Prontuário (patient)
+───────────────────────────────────────── */
+function EHRAtendimento({ appt, patient: patientProp, onClose }: {
+  appt?: Appointment;
+  patient?: Patient;
+  onClose: () => void;
+}) {
+  const doctor      = React.useContext(DoctorContext);
+  const editorRef   = React.useRef<HTMLDivElement>(null);
+  const debounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const recordIdRef = React.useRef<string | null>(null);
+  const elapsedRef  = React.useRef(0);
+  const startTs     = React.useRef(Date.now());
+
+  // Resolve patient from either source
+  const patientData = (appt?.patients as Patient | undefined) ?? patientProp ?? null;
+  const patientId   = appt?.patient_id ?? patientProp?.id ?? '';
+  const isApptMode  = !!appt;
+
+  const [elapsed,   setElapsed]   = useState(0);
+  const [isEmpty,   setIsEmpty]   = useState(true);
+  const [saving,    setSaving]    = useState(false);
+  const [autoSaved, setAutoSaved] = useState<string>('');   // '' | 'saving' | 'saved'
+  const [showPresc, setShowPresc] = useState(false);
+  const [atestDias, setAtestDias] = useState('1');
+  const [records,   setRecords]   = useState<MedicalRecord[]>([]);
+  const [activeTab, setActiveTab] = useState<'Atendimento'|'Prontuário'|'Relacionamento'|'Arquivos'>('Atendimento');
+
+  /* ── Timer (somente modo agendamento) ── */
+  useEffect(() => {
+    if (!isApptMode) return;
+    const iv = setInterval(() => {
+      const s = Math.floor((Date.now() - startTs.current) / 1000);
+      setElapsed(s);
+      elapsedRef.current = s;
+    }, 1000);
+    return () => clearInterval(iv);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const fmtElapsed = (s: number) =>
+    `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+
+  /* ── Build HTML from old SOAP fields ── */
+  const buildHtml = (r: MedicalRecord): string => {
+    // If evolution already looks like rich HTML, use it directly
+    if (r.evolution && /^<[a-z]/.test(r.evolution)) return r.evolution;
+    const parts: string[] = [];
+    if (r.clinical_history) parts.push(`<h3>História Clínica</h3><p>${r.clinical_history}</p>`);
+    if (r.allergies)        parts.push(`<h3>Alergias</h3><p>${r.allergies}</p>`);
+    if (r.medications)      parts.push(`<h3>Medicações</h3><p>${r.medications}</p>`);
+    if (r.complaint)        parts.push(`<h3>Queixa Principal</h3><p>${r.complaint}</p>`);
+    if (r.evolution)        parts.push(`<h3>Evolução</h3><p>${r.evolution}</p>`);
+    if (r.diagnosis)        parts.push(`<h3>Diagnóstico</h3><p>${r.diagnosis}</p>`);
+    if (r.conduct)          parts.push(`<h3>Conduta</h3><p>${r.conduct}</p>`);
+    return parts.join('');
+  };
+
+  /* ── Load records ── */
+  useEffect(() => {
+    if (!patientId) return;
+    supabase.from('medical_records')
+      .select('*')
+      .eq('patient_id', patientId)
+      .order('created_at', { ascending: false })
+      .then(({ data }) => {
+        const recs = (data as MedicalRecord[]) ?? [];
+        setRecords(recs);
+        // Always start with a blank editor — do NOT pre-fill from previous records
+        if (editorRef.current) {
+          editorRef.current.innerHTML = '';
+          setIsEmpty(true);
+        }
+        requestAnimationFrame(() => editorRef.current?.focus());
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [patientId]);
+
+  /* ── Persist ── */
+  const persist = async (finalizar = false) => {
+    const html = editorRef.current?.innerHTML ?? '';
+    const payload = {
+      patient_id:       patientId,
+      doctor_id:        appt?.doctor_id ?? doctor.id,
+      evolution:        html,
+      duration_seconds: elapsedRef.current,
+    };
+    if (recordIdRef.current) {
+      await supabase.from('medical_records').update(payload).eq('id', recordIdRef.current);
+    } else {
+      const { data } = await supabase.from('medical_records').insert(payload).select('id').single();
+      if (data?.id) recordIdRef.current = data.id;
+    }
+    if (finalizar && appt) {
+      await supabase.from('appointments').update({ status: 'concluido' }).eq('id', appt.id);
+    }
+  };
+
+  /* ── Autosave debounce ── */
+  const scheduleAutoSave = () => {
+    setAutoSaved('saving');
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(async () => {
+      await persist(false);
+      setAutoSaved('saved');
+      setTimeout(() => setAutoSaved(''), 2500);
+    }, 1500);
+  };
+
+  const handleInput = () => {
+    const html = editorRef.current?.innerHTML ?? '';
+    setIsEmpty(!html || html === '<br>');
+    scheduleAutoSave();
+  };
+
+  /* ── Manual save / finalize ── */
+  const handleSave = async () => {
+    if (debounceRef.current) { clearTimeout(debounceRef.current); debounceRef.current = null; }
+    setSaving(true);
+    await persist(false);
+    setSaving(false);
+    setAutoSaved('saved');
+    setTimeout(() => setAutoSaved(''), 2000);
+  };
+
+  const handleFinalize = async () => {
+    if (debounceRef.current) { clearTimeout(debounceRef.current); debounceRef.current = null; }
+    setSaving(true);
+    await persist(true);
+
+    // Lança receita automaticamente em Finanças ao finalizar o atendimento
+    const valMatch = appt?.notes?.match(/__val:([\d.]+)__/);
+    const txAmount = valMatch ? parseFloat(valMatch[1]) : 0;
+    if (appt && txAmount > 0) {
+      const typeLbl = TYPE_LABEL[appt.type] ?? appt.type;
+      await supabase.from('transactions').insert({
+        type:           'receita',
+        amount:         txAmount,
+        category:       appt.type,
+        description:    `${typeLbl} — ${patientData?.name ?? 'Paciente'}`,
+        date:           todayISO(),
+        status:         'pendente',
+        payment_method: null,
+        patient_id:     patientId || null,
+        doctor_id:      appt.doctor_id ?? doctor.id,
+        notes:          `Gerado automaticamente ao finalizar o atendimento.`,
+      });
+    }
+
+    setSaving(false);
+    onClose();
+  };
+
+  /* ── Rich-text commands ── */
+  const exec = (cmd: string, val?: string) => {
+    editorRef.current?.focus();
+    document.execCommand(cmd, false, val);
+  };
+
+  const insertSnippet = (field: string) => {
+    editorRef.current?.focus();
+    document.execCommand('insertHTML', false, `<p><strong>${field}:</strong>&nbsp;</p>`);
+  };
+
+  /* ── Atestado print ── */
+  const printAtest = () => {
+    const w = window.open('', '_blank');
+    if (!w) return;
+    w.document.write(`<html><body style="font-family:Arial;padding:40px;max-width:600px;margin:auto">
+      <h2 style="text-align:center">ATESTADO MÉDICO</h2>
+      <p>Atesto que o(a) paciente <strong>${patientData?.name ?? ''}</strong>
+      esteve sob minha responsabilidade médica, necessitando de afastamento
+      de suas atividades por <strong>${atestDias} dia(s)</strong>.</p>
+      <p style="margin-top:40px">Dr. ${doctor.name} — CRM ${doctor.crm}</p>
+      <p style="color:#999;font-size:12px">${new Date().toLocaleDateString('pt-BR')}</p>
+      </body></html>`);
+    w.document.close(); w.print();
+  };
+
+  const ehrTabs = ['Atendimento', 'Prontuário', 'Relacionamento', 'Arquivos'] as const;
+
+  /* ── Reusable inline style objects ── */
+  const chipStyle: CSSProperties = {
+    display: 'inline-flex', alignItems: 'center', gap: 4,
+    borderRadius: 9999, border: '1px solid #e2e8f0', background: '#fff',
+    padding: '3px 10px', fontSize: 11, fontWeight: 500, color: '#374151',
+    cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap',
+  };
+  const btnSecondary: CSSProperties = {
+    display: 'inline-flex', alignItems: 'center', gap: 5,
+    borderRadius: 7, border: '1px solid #e2e8f0', background: '#fff',
+    padding: '4px 12px', fontSize: 12, fontWeight: 500, color: '#374151',
+    cursor: 'pointer', fontFamily: 'inherit',
+  };
+  const btnPrimary: CSSProperties = {
+    display: 'inline-flex', alignItems: 'center', gap: 5,
+    borderRadius: 7, border: 'none', background: '#2563eb',
+    padding: '4px 14px', fontSize: 12, fontWeight: 600, color: '#fff',
+    cursor: 'pointer', fontFamily: 'inherit',
+  };
+  const panelStyle: CSSProperties = {
+    background: '#fff', border: '1px solid #e2e8f0',
+    borderRadius: 10, boxShadow: '0 1px 3px rgba(0,0,0,.05)',
+  };
+
+  const docList = [
+    { label: 'Prescrição Rápida',            icon: '💊', action: () => setShowPresc(true) },
+    { label: 'Prescrições',                  icon: '📋', action: () => setShowPresc(true) },
+    { label: 'Solicitações de Procedimento', icon: '📄', action: () => {} },
+    { label: 'Encaminhamentos',              icon: '📤', action: () => {} },
+    { label: 'Atestados',                    icon: '📄', action: () => {} },
+    { label: 'Outros Documentos',            icon: '📁', action: () => {} },
+  ];
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 600, display: 'grid',
+      gridTemplateColumns: '205px 1fr 355px', fontFamily: 'inherit',
+      background: 'var(--color-muted, #f1f5f9)', overflow: 'hidden' }}>
+
+      {/* ── Editor styles ── */}
+      <style>{`
+        #ehr-main-editor { outline: none; min-height: 300px; caret-color: #2563eb; }
+        #ehr-main-editor h1,#ehr-main-editor h2,#ehr-main-editor h3 { margin:0 0 10px; color:#0F1626; font-weight:700; }
+        #ehr-main-editor h3 { font-size:15px; }
+        #ehr-main-editor p  { margin:0 0 10px; }
+        #ehr-main-editor ul,#ehr-main-editor ol { padding-left:22px; margin:0 0 10px; }
+        #ehr-main-editor li { margin-bottom:4px; }
+        #ehr-main-editor strong { font-weight:700; }
+        #ehr-main-editor em    { font-style:italic; }
+      `}</style>
+
+      {/* ══ LEFT SIDEBAR ══ */}
+      <aside style={{ borderRight: '1px solid var(--color-border, #e2e8f0)',
+        background: 'var(--color-card, #fff)', overflowY: 'auto',
+        display: 'flex', flexDirection: 'column' }}>
+
+        {/* Back */}
+        <div style={{ padding: '12px 14px', flexShrink: 0 }}>
+          <button onClick={onClose} className="ehr-action-secondary" style={{ fontSize: 12, height: 30 }}>
+            ← Voltar
+          </button>
+        </div>
+
+        {/* Avatar + name */}
+        <div style={{ padding: '6px 14px 16px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+          <div style={{ width: 88, height: 88, borderRadius: '50%',
+            border: '2px solid var(--color-primary, #2563eb)',
+            background: 'var(--color-accent, #f0f4ff)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 26, fontWeight: 700, color: 'var(--color-primary, #2563eb)' }}>
+            {patientData ? initials(patientData.name) : '?'}
+          </div>
+          <div style={{ marginTop: 10, textAlign: 'center' }}>
+            <p style={{ margin: '0 0 2px', fontSize: 13, fontWeight: 700,
+              color: 'var(--color-foreground, #0f172a)', lineHeight: 1.3 }}>
+              {patientData?.name ?? '—'}
+            </p>
+            {patientData?.birth_date && (
+              <p style={{ margin: 0, fontSize: 12, color: 'var(--color-muted-foreground, #64748b)' }}>
+                {calcAgeDetailed(patientData.birth_date)}
+              </p>
+            )}
+          </div>
+
+          {/* Insurance badge */}
+          {(patientData?.insurance || appt?.insurance) && (
+            <div style={{ marginTop: 8, padding: '3px 10px',
+              background: 'var(--color-accent, #f0f4ff)',
+              color: 'var(--color-accent-foreground, #1d4ed8)',
+              borderRadius: 9999, fontSize: 11, fontWeight: 600 }}>
+              {patientData?.insurance ?? appt?.insurance}
+            </div>
+          )}
+
+          {/* Timer pill — appt mode only */}
+          {isApptMode && (
+            <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 6,
+              padding: '5px 14px', background: '#F8FAFF', borderRadius: 20, border: '1px solid #E0E9FF' }}>
+              <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#10B981',
+                boxShadow: '0 0 0 2px rgba(16,185,129,.2)' }} />
+              <span style={{ fontSize: 13, fontWeight: 700, color: '#0066D0',
+                fontVariantNumeric: 'tabular-nums' }}>
+                {fmtElapsed(elapsed)}
+              </span>
+            </div>
+          )}
+        </div>
+
+        {/* Contact info */}
+        <div style={{ padding: '14px', borderTop: '1px solid var(--color-border, #e2e8f0)', flex: 1 }}>
+          <p style={{ margin: '0 0 10px', fontSize: 11, fontWeight: 700,
+            color: 'var(--color-muted-foreground, #64748b)',
+            textTransform: 'uppercase', letterSpacing: '.05em' }}>
+            Dados do paciente
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12,
+            color: 'var(--color-muted-foreground, #64748b)' }}>
+            {patientData?.phone && (
+              <p style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+                📞 {patientData.phone}
+              </p>
+            )}
+            {patientData?.birth_date && (
+              <p style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+                📅 {new Date(patientData.birth_date + 'T12:00:00').toLocaleDateString('pt-BR')}
+              </p>
+            )}
+            {appt?.type && (
+              <p style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+                🩺 {TYPE_LABEL[appt.type] ?? appt.type}
+                {appt.start_time && ` · ${appt.start_time.slice(0, 5)}`}
+              </p>
+            )}
+          </div>
+        </div>
+      </aside>
+
+      {/* ══ MAIN CONTENT ══ */}
+      <main style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden',
+        background: 'var(--color-muted, #f1f5f9)' }}>
+
+        {/* Tab header */}
+        <header style={{ padding: '10px 16px 0', flexShrink: 0 }}>
+          <div style={{ background: '#fff', border: '1px solid #e2e8f0',
+            borderRadius: 8, padding: '4px 6px', display: 'flex', gap: 4 }}>
+            {ehrTabs.map(tab => (
+              <button key={tab} type="button"
+                onClick={() => setActiveTab(tab)}
+                style={{
+                  display: 'block', padding: '6px 14px', borderRadius: 6, border: 'none',
+                  fontSize: 13, fontWeight: activeTab === tab ? 600 : 400,
+                  cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap',
+                  background: activeTab === tab ? '#EFF6FF' : 'transparent',
+                  color: activeTab === tab ? '#1d4ed8' : '#64748b',
+                  borderBottom: activeTab === tab ? '2px solid #2563eb' : '2px solid transparent',
+                  transition: 'all 0.12s ease',
+                }}>
+                {tab}
+              </button>
+            ))}
+          </div>
+        </header>
+
+        {/* Scrollable body */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '12px 16px 84px' }}>
+
+          {/* AI banner */}
+          <div style={{ ...panelStyle, overflow: 'hidden', marginBottom: 12 }}>
+            <div style={{ background: '#EFF6FF', borderBottom: '1px solid #BFDBFE',
+              padding: '4px 14px', textAlign: 'center', fontSize: 12, color: '#1E40AF' }}>
+              Você tem 5 usos restantes para testes do Scribe AI da Doctor Assistant!
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '8px 14px', gap: 8, flexWrap: 'wrap' as const }}>
+              <span style={{ fontSize: 12, color: '#0ea5e9', display: 'flex', alignItems: 'center', gap: 6 }}>
+                🤖 Assistente de IA
+              </span>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button type="button" style={btnSecondary}>Generalista</button>
+                <button type="button" style={btnPrimary}
+                  onClick={() => exec('insertHTML', '<p><em>— IA: reforçar educação em saúde e sinais de alarme.</em></p>')}>
+                  📓 Iniciar Registro
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* ── Tab: Atendimento ── */}
+          {activeTab === 'Atendimento' && (
+            <div style={{ ...panelStyle, padding: '16px' }}>
+              <h2 style={{ margin: '0 0 12px', fontSize: 15, fontWeight: 700,
+                color: 'var(--color-foreground, #0f172a)' }}>
+                Registro interno
+              </h2>
+
+              {/* Template + autosave */}
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center',
+                flexWrap: 'wrap' as const, marginBottom: 8 }}>
+                <select style={{ height: 36, flex: 1, minWidth: 0, fontSize: 12,
+                  border: '1px solid #e2e8f0', borderRadius: 7, padding: '0 10px',
+                  fontFamily: 'inherit', outline: 'none', background: '#fff', color: '#374151' }}>
+                  {['Selecione um modelo de anamnese', 'Modelo de anamnese geral',
+                    'Retorno cardiologia', 'Acompanhamento diabetes', 'Queixa respiratória']
+                    .map(t => <option key={t}>{t}</option>)}
+                </select>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 10px',
+                  background: 'var(--color-muted, #f1f5f9)', borderRadius: 9999, fontSize: 11,
+                  color: autoSaved === 'saved' ? '#10B981' : 'var(--color-muted-foreground, #64748b)',
+                  whiteSpace: 'nowrap', flexShrink: 0 }}>
+                  🕐 {autoSaved === 'saving' ? 'Salvando…' : autoSaved === 'saved' ? 'Autosalvo' : 'Agora'}
+                </span>
+              </div>
+
+              {/* Snippet chips */}
+              <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' as const, marginBottom: 8 }}>
+                {(['QP', 'HDA', 'Exame', 'Dx', 'Plano'] as const).map(s => (
+                  <button key={s} type="button" onClick={() => insertSnippet(s)} style={chipStyle}>
+                    ✨ {s}
+                  </button>
+                ))}
+                <button type="button" onClick={() => exec('bold')}         style={{ ...chipStyle, fontWeight: 700 }}>B</button>
+                <button type="button" onClick={() => exec('italic')}        style={{ ...chipStyle, fontStyle: 'italic' }}>I</button>
+                <button type="button" onClick={() => exec('formatBlock','h3')}  style={chipStyle}>H</button>
+                <button type="button" onClick={() => exec('insertUnorderedList')} style={chipStyle}>≡</button>
+                <button type="button" onClick={() => exec('formatBlock','p')}    style={chipStyle}>¶</button>
+              </div>
+
+              {/* Editor */}
+              <div style={{ minHeight: 340, position: 'relative', border: '1px solid #e2e8f0',
+                borderRadius: 8, overflow: 'hidden', background: '#fff' }}>
+                {isEmpty && (
+                  <div style={{ position: 'absolute', top: 14, left: 14,
+                    color: 'var(--color-muted-foreground, #64748b)', fontSize: 14,
+                    pointerEvents: 'none', userSelect: 'none', lineHeight: 1.7 }}>
+                    Digite o prontuário…
+                  </div>
+                )}
+                <div id="ehr-main-editor" ref={editorRef}
+                  contentEditable suppressContentEditableWarning
+                  onInput={handleInput}
+                  style={{ padding: '14px 16px', fontSize: 14, lineHeight: 1.75,
+                    color: 'var(--color-foreground, #0f172a)', minHeight: 340,
+                    wordBreak: 'break-word', outline: 'none' }} />
+                <button type="button"
+                  onClick={() => exec('insertHTML',
+                    '<p><em>— IA: reforçar educação em saúde e sinais de alarme.</em></p>')}
+                  title="Assistente de IA"
+                  style={{
+                    position: 'absolute', bottom: 12, right: 12,
+                    display: 'inline-flex', alignItems: 'center', gap: 5,
+                    borderRadius: 9999, border: 'none',
+                    background: 'linear-gradient(135deg, #7c3aed 0%, #2563eb 100%)',
+                    padding: '6px 14px', fontSize: 12, fontWeight: 600, color: '#fff',
+                    cursor: 'pointer', fontFamily: 'inherit',
+                    boxShadow: '0 2px 10px rgba(124,58,237,.35)',
+                  }}>
+                  🤖 IA
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ── Tab: Prontuário (histórico) ── */}
+          {activeTab === 'Prontuário' && (
+            <div style={{ ...panelStyle, padding: '16px' }}>
+              <h2 style={{ margin: '0 0 14px', fontSize: 15, fontWeight: 700,
+                color: 'var(--color-foreground, #0f172a)' }}>
+                Histórico de consultas
+              </h2>
+              {records.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '32px 0', fontSize: 13,
+                  color: 'var(--color-muted-foreground, #64748b)' }}>
+                  Nenhum registro encontrado.
+                </div>
+              ) : records.map((r, i) => (
+                <div key={r.id ?? i} style={{ padding: '10px 12px', marginBottom: 8,
+                  background: 'var(--color-muted, #f1f5f9)', borderRadius: 8,
+                  fontSize: 13, lineHeight: 1.6 }}>
+                  <div style={{ fontSize: 11, color: 'var(--color-muted-foreground, #64748b)',
+                    marginBottom: 5 }}>
+                    {r.created_at
+                      ? new Date(r.created_at).toLocaleDateString('pt-BR',
+                          { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+                      : '—'}
+                    {r.duration_seconds && r.duration_seconds > 0
+                      ? ` · ${Math.floor(r.duration_seconds / 60)} min` : ''}
+                  </div>
+                  <div style={{ color: 'var(--color-foreground, #0f172a)' }}
+                    dangerouslySetInnerHTML={{ __html: typeof window !== 'undefined' ? DOMPurify.sanitize(r.evolution ?? r.complaint ?? '—') : (r.evolution ?? r.complaint ?? '—') }} />
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* ── Tabs: placeholder ── */}
+          {(activeTab === 'Relacionamento' || activeTab === 'Arquivos') && (
+            <div style={{ ...panelStyle, padding: '48px 16px', textAlign: 'center' }}>
+              <div style={{ fontSize: 13, color: 'var(--color-muted-foreground, #64748b)' }}>
+                Em breve
+              </div>
+            </div>
+          )}
+        </div>
+      </main>
+
+      {/* ══ RIGHT SIDEBAR ══ */}
+      <aside style={{ borderLeft: '1px solid var(--color-border, #e2e8f0)',
+        background: 'var(--color-muted, #f1f5f9)',
+        overflowY: 'auto', padding: '14px', display: 'flex',
+        flexDirection: 'column', gap: 12 }}>
+
+        {/* Documents */}
+        <div style={{ ...panelStyle, padding: '12px 14px' }}>
+          <h2 style={{ margin: '0 0 10px', fontSize: 13, fontWeight: 700, color: '#0f172a' }}>Documentos</h2>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {docList.map(({ label, icon, action }) => (
+              <button key={label} type="button" onClick={action}
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  width: '100%', padding: '8px 10px',
+                  border: '1px solid var(--color-border, #e2e8f0)',
+                  borderRadius: 7, background: 'var(--color-card, #fff)',
+                  fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', transition: 'background .12s' }}
+                onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = 'var(--color-muted, #f1f5f9)'}
+                onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'var(--color-card, #fff)'}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>{icon} {label}</span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  width: 22, height: 22, borderRadius: 6, background: '#EFF6FF', color: '#1d4ed8',
+                  fontSize: 15, flexShrink: 0 }}>＋</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Atestado rápido */}
+        <div style={{ ...panelStyle, padding: '12px 14px' }}>
+          <h2 style={{ margin: '0 0 10px', fontSize: 13, fontWeight: 700, color: '#0f172a' }}>📄 Atestado Rápido</h2>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+            <input type="number" min={1} value={atestDias}
+              onChange={e => setAtestDias(e.target.value)}
+              style={{ width: 52, height: 30, border: '1px solid #e2e8f0',
+                borderRadius: 6, padding: '0 6px', fontSize: 13, fontFamily: 'inherit',
+                outline: 'none', textAlign: 'center', background: '#fff' }} />
+            <span style={{ fontSize: 12, color: '#64748b' }}>dia(s)</span>
+          </div>
+          <button onClick={printAtest} style={{
+            ...btnPrimary, width: '100%', justifyContent: 'center',
+            height: 34, fontSize: 13, borderRadius: 8,
+          }}>
+            Imprimir Atestado
+          </button>
+        </div>
+
+        {/* Planilhas e gráficos */}
+        <div style={{ ...panelStyle, padding: '12px 14px' }}>
+          <h2 style={{ margin: '0 0 10px', fontSize: 13, fontWeight: 700, color: '#0f172a' }}>Planilhas e Gráficos</h2>
+          {[['Gráficos', 'Histórico clínico'], ['Planilhas', 'Acompanhamento']].map(([label, hint]) => (
+            <button key={label} type="button"
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                width: '100%', padding: '8px 10px', marginBottom: 6,
+                border: '1px solid var(--color-border, #e2e8f0)',
+                borderRadius: 7, background: 'var(--color-card, #fff)',
+                fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', transition: 'background .12s' }}
+              onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = 'var(--color-muted, #f1f5f9)'}
+              onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'var(--color-card, #fff)'}>
+              <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+                <span>{label}</span>
+                <span style={{ fontSize: 10, color: 'var(--color-muted-foreground, #64748b)' }}>{hint}</span>
+              </span>
+              <span className="ehr-mini-icon" style={{ fontSize: 14 }}>＋</span>
+            </button>
+          ))}
+        </div>
+      </aside>
+
+      {/* ══ BOTTOM ACTION BAR ══ — position:fixed isolado do grid */}
+      <div style={{
+        position: 'fixed', bottom: 0, left: 205, right: 355, zIndex: 700,
+        display: 'flex', alignItems: 'center', gap: 8,
+        padding: '10px 20px',
+        background: '#fff',
+        borderTop: '1px solid #e2e8f0',
+        boxShadow: '0 -2px 12px rgba(0,0,0,.06)',
+      }}>
+        <span style={{ flex: 1, fontSize: 11, display: 'flex', alignItems: 'center', gap: 5,
+          color: autoSaved === 'saved' ? '#10B981' : '#94a3b8', transition: 'color .3s' }}>
+          {autoSaved === 'saving' && '● Salvando…'}
+          {autoSaved === 'saved'  && '✓ Autosalvo'}
+        </span>
+        <button type="button" onClick={() => {
+          const html = editorRef.current?.innerHTML ?? '';
+          if (html.trim() && html !== '<br>' && !window.confirm('Fechar sem salvar? O conteúdo atual será descartado.')) return;
+          onClose();
+        }} style={{
+          display: 'inline-flex', alignItems: 'center', gap: 5, height: 36,
+          padding: '0 16px', border: '1px solid #e2e8f0', borderRadius: 8,
+          background: '#fff', fontSize: 13, fontWeight: 500, color: '#374151',
+          cursor: 'pointer', fontFamily: 'inherit',
+        }}>✕ Cancelar</button>
+        <button type="button" onClick={handleSave} disabled={saving} style={{
+          display: 'inline-flex', alignItems: 'center', gap: 5, height: 36,
+          padding: '0 16px', border: '1.5px solid #2563eb', borderRadius: 8,
+          background: '#fff', fontSize: 13, fontWeight: 600, color: '#2563eb',
+          cursor: saving ? 'not-allowed' : 'pointer', fontFamily: 'inherit', opacity: saving ? .6 : 1,
+        }}>✓ Salvar e continuar</button>
+        <button type="button" onClick={handleFinalize} disabled={saving} style={{
+          display: 'inline-flex', alignItems: 'center', gap: 5, height: 36,
+          padding: '0 20px', border: 'none', borderRadius: 8,
+          background: 'linear-gradient(135deg, #0055C8 0%, #0077F5 100%)',
+          fontSize: 13, fontWeight: 700, color: '#fff',
+          cursor: saving ? 'not-allowed' : 'pointer', fontFamily: 'inherit', opacity: saving ? .6 : 1,
+          boxShadow: '0 2px 10px rgba(0,102,208,.28)',
+        }}>{isApptMode ? 'Finalizar atendimento' : 'Salvar e fechar'}</button>
+      </div>
+
+      {/* Prescription modal */}
+      {showPresc && patientData && (
+        <NovaPrescricaoModal
+          patient={patientData}
+          onClose={() => setShowPresc(false)}
+          onSaved={() => setShowPresc(false)}
+        />
+      )}
+    </div>
   );
 }
 
@@ -2369,12 +5423,12 @@ function Financas() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [period, setPeriod]             = useState('mes');
   const [loading, setLoading]           = useState(true);
-  const [showAddTxn,  setShowAddTxn]    = useState(false);
-  const [txnType,     setTxnType]       = useState<'receita'|'despesa'|'transferencia'>('receita');
+  const [showAddTxn, setShowAddTxn]     = useState(false);
+  const [txnType, setTxnType]           = useState<'receita'|'despesa'|'transferencia'>('receita');
 
   const loadTxns = (p: string) => {
-    const now  = new Date();
-    let start  = '';
+    const now = new Date();
+    let start = '';
     if (p === 'mes') {
       start = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
     } else if (p === 'semana') {
@@ -2393,88 +5447,134 @@ function Financas() {
   const despesas = transactions.filter(t => t.type === 'despesa').reduce((s, t) => s + Number(t.amount), 0);
   const saldo    = receitas - despesas;
 
-  const days   = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
-  const maxAmt = Math.max(...transactions.map(t => Number(t.amount)), 1);
-  const barData = days.map((day, i) => {
-    const val = transactions.filter(t => new Date(t.date + 'T12:00:00').getDay() === i).reduce((s, t) => s + Number(t.amount), 0);
-    return { day, h: Math.round(val / maxAmt * 100), active: new Date().getDay() === i };
+  // Chart: daily aggregation grouped by date
+  const chartMap: Record<string, { receita: number; despesa: number }> = {};
+  transactions.forEach(t => {
+    if (!chartMap[t.date]) chartMap[t.date] = { receita: 0, despesa: 0 };
+    if (t.type === 'receita') chartMap[t.date].receita += Number(t.amount);
+    if (t.type === 'despesa') chartMap[t.date].despesa += Number(t.amount);
   });
+  const chartData = Object.entries(chartMap)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, v]) => ({
+      label: new Date(date + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }),
+      receita: v.receita,
+      despesa: v.despesa,
+    }));
+
+  // Faturamento da semana
+  const weekStart = weekRange().start;
+  const weekRec = transactions
+    .filter(t => t.type === 'receita' && t.date >= weekStart)
+    .reduce((s, t) => s + Number(t.amount), 0);
+
+  const periodLabel = period === 'semana' ? 'esta semana' : period === 'mes' ? 'este mês' : 'este ano';
 
   return (
-    <div style={{ flex: 1, overflowY: 'auto', padding: '20px 22px', background: '#F9FAFB', display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <div style={{ flex: 1, overflowY: 'auto', padding: '20px 22px', background: '#F9FAFB', display: 'flex', flexDirection: 'column', gap: 14 }}>
+
+      {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div style={{ fontSize: 18, fontWeight: 600, color: '#111827' }}>Análise financeira</div>
-        <button onClick={() => window.print()} style={{ display: 'flex', alignItems: 'center', gap: 6, height: 34, padding: '0 14px', background: '#0066D0', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit' }}>Gerar relatório</button>
-      </div>
-      <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-        <span style={{ fontSize: 13, color: '#6B7280' }}>Período</span>
-        <select value={period} onChange={e => setPeriod(e.target.value)} style={{ height: 32, border: '1px solid #E5E7EB', borderRadius: 6, padding: '0 8px', fontSize: 13, color: '#111827', background: '#fff', fontFamily: 'inherit' }}>
-          <option value="semana">Esta semana</option>
-          <option value="mes">Este mês</option>
-          <option value="ano">Este ano</option>
-        </select>
-      </div>
-      <div style={{ display: 'flex', gap: 10 }}>
-        {([{ label: 'RECEITA', color: '#0066D0', type: 'receita' }, { label: 'DESPESA', color: '#EF4444', type: 'despesa' }, { label: 'TRANSFERÊNCIA', color: '#6B7280', type: 'transferencia' }] as const).map((b, i) => (
-          <button key={i} onClick={() => { setTxnType(b.type); setShowAddTxn(true); }} style={{ display: 'flex', alignItems: 'center', gap: 7, height: 36, padding: '0 18px', background: b.color, color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
-            <Icon name="plus" size={13} color="#fff" /> {b.label}
+        <div>
+          <div style={{ fontSize: 17, fontWeight: 700, color: '#111827' }}>Finanças</div>
+          <div style={{ fontSize: 12, color: '#6B7280', marginTop: 1 }}>Resumo {periodLabel}</div>
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <select value={period} onChange={e => setPeriod(e.target.value)}
+            style={{ height: 32, border: '1px solid #E5E7EB', borderRadius: 7, padding: '0 10px', fontSize: 12, color: '#374151', background: '#fff', fontFamily: 'inherit', cursor: 'pointer' }}>
+            <option value="semana">Esta semana</option>
+            <option value="mes">Este mês</option>
+            <option value="ano">Este ano</option>
+          </select>
+          <button onClick={() => { setTxnType('receita'); setShowAddTxn(true); }}
+            style={{ display: 'flex', alignItems: 'center', gap: 5, height: 32, padding: '0 12px', background: '#10B981', color: '#fff', border: 'none', borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+            <Icon name="plus" size={12} color="#fff" /> Receita
           </button>
-        ))}
+          <button onClick={() => { setTxnType('despesa'); setShowAddTxn(true); }}
+            style={{ display: 'flex', alignItems: 'center', gap: 5, height: 32, padding: '0 12px', background: '#EF4444', color: '#fff', border: 'none', borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+            <Icon name="plus" size={12} color="#fff" /> Despesa
+          </button>
+        </div>
       </div>
+
       {loading ? <Spinner /> : (
         <>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-            <Card style={{ padding: '14px 16px' }}>
-              <div style={{ fontSize: 12, color: '#6B7280', marginBottom: 4 }}>Saldo total</div>
-              <div style={{ fontSize: 24, fontWeight: 700, color: saldo >= 0 ? '#0066D0' : '#EF4444' }}>{fmtCurrency(saldo)}</div>
-            </Card>
-            <Card style={{ padding: '14px 16px' }}>
-              <div style={{ fontSize: 12, color: '#6B7280', marginBottom: 4 }}>Total Receitas</div>
-              <div style={{ fontSize: 24, fontWeight: 700, color: '#10B981' }}>{fmtCurrency(receitas)}</div>
-            </Card>
-            <Card style={{ padding: '14px 16px' }}>
-              <div style={{ fontSize: 12, color: '#6B7280', marginBottom: 4 }}>Total Despesas</div>
-              <div style={{ fontSize: 24, fontWeight: 700, color: '#EF4444' }}>{fmtCurrency(despesas)}</div>
-            </Card>
+          {/* KPI cards */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
+            {[
+              { label: 'Receitas', value: receitas, color: '#10B981', bg: '#F0FDF4', border: '#BBF7D0' },
+              { label: 'Despesas', value: despesas, color: '#EF4444', bg: '#FEF2F2', border: '#FECACA' },
+              { label: 'Saldo', value: saldo, color: saldo >= 0 ? '#0066D0' : '#EF4444', bg: saldo >= 0 ? '#EFF6FF' : '#FEF2F2', border: saldo >= 0 ? '#BFDBFE' : '#FECACA' },
+              { label: 'Faturamento semana', value: weekRec, color: '#7C3AED', bg: '#F5F3FF', border: '#DDD6FE' },
+            ].map((k, i) => (
+              <div key={i} style={{ background: k.bg, border: `1px solid ${k.border}`, borderRadius: 10, padding: '12px 14px' }}>
+                <div style={{ fontSize: 11, color: '#6B7280', fontWeight: 500, marginBottom: 4 }}>{k.label}</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: k.color }}>{fmtCurrency(k.value)}</div>
+              </div>
+            ))}
           </div>
-          <Card style={{ padding: '14px 16px' }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: '#374151', marginBottom: 12 }}>Balanço semanal</div>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', height: 80 }}>
-              {barData.map((b, i) => (
-                <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                  <div style={{ width: '100%', height: (b.h || 3) + '%', background: b.active ? '#0066D0' : '#DBEAFE', borderRadius: '3px 3px 0 0', minHeight: 4 }} />
-                  <div style={{ fontSize: 10, color: '#9CA3AF', marginTop: 4 }}>{b.day}</div>
-                </div>
-              ))}
+
+          {/* Recharts: Receitas vs Despesas */}
+          <div style={{ background: '#fff', border: '1px solid #E5E7EB', borderRadius: 10, padding: '14px 16px' }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 10 }}>Receitas vs Despesas</div>
+            {chartData.length === 0 ? (
+              <div style={{ height: 120, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#9CA3AF', fontSize: 13 }}>
+                Nenhum dado no período
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height={140}>
+                <BarChart data={chartData} barGap={2} barCategoryGap="30%">
+                  <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" vertical={false} />
+                  <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#9CA3AF' }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fontSize: 10, fill: '#9CA3AF' }} axisLine={false} tickLine={false} tickFormatter={v => `R$${v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v}`} width={42} />
+                  <Tooltip
+                    contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid #E5E7EB', boxShadow: '0 2px 8px rgba(0,0,0,.08)' }}
+                    formatter={(value, name) => [fmtCurrency(Number(value)), name === 'receita' ? 'Receita' : 'Despesa']}
+                  />
+                  <Bar dataKey="receita" fill="#10B981" radius={[3,3,0,0]} />
+                  <Bar dataKey="despesa" fill="#EF4444" radius={[3,3,0,0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+
+          {/* Últimas transações */}
+          <div style={{ background: '#fff', border: '1px solid #E5E7EB', borderRadius: 10, overflow: 'hidden' }}>
+            <div style={{ padding: '10px 16px', borderBottom: '1px solid #F3F4F6', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: '#374151' }}>Últimas transações</span>
+              <span style={{ fontSize: 11, color: '#9CA3AF' }}>{transactions.length} registros</span>
             </div>
-          </Card>
-          <Card>
-            <div style={{ padding: '10px 16px', borderBottom: '1px solid #F3F4F6' }}>
-              <span style={{ fontSize: 13, fontWeight: 600, color: '#111827' }}>Últimas transações</span>
-            </div>
-            {transactions.length === 0
-              ? <div style={{ padding: '24px', textAlign: 'center', color: '#9CA3AF', fontSize: 13 }}>Nenhuma transação no período</div>
-              : transactions.slice(0, 10).map((t, i) => (
-                <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', borderBottom: i < 9 ? '1px solid #F9FAFB' : 'none' }}>
-                  <div style={{ width: 34, height: 34, borderRadius: 8, background: t.type === 'receita' ? '#D1FAE5' : t.type === 'despesa' ? '#FEE2E2' : '#F3F4F6', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                    <Icon name="dollar" size={15} color={t.type === 'receita' ? '#065F46' : t.type === 'despesa' ? '#991B1B' : '#6B7280'} />
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 500, color: '#111827' }}>{t.description ?? t.category ?? t.type}</div>
-                    <div style={{ fontSize: 11, color: '#9CA3AF' }}>{new Date(t.date + 'T12:00:00').toLocaleDateString('pt-BR')} · {t.payment_method ?? '—'}</div>
-                  </div>
-                  <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: t.type === 'receita' ? '#10B981' : t.type === 'despesa' ? '#EF4444' : '#6B7280' }}>
-                      {t.type === 'receita' ? '+' : t.type === 'despesa' ? '-' : ''}{fmtCurrency(Number(t.amount))}
-                    </div>
-                    <div style={{ marginTop: 2 }}><Badge variant={t.status === 'concluido' ? 'green' : t.status === 'cancelado' ? 'gray' : 'yellow'}>{t.status}</Badge></div>
-                  </div>
+            {transactions.length === 0 ? (
+              <div style={{ padding: '20px', textAlign: 'center', color: '#9CA3AF', fontSize: 13 }}>Nenhuma transação no período</div>
+            ) : transactions.slice(0, 12).map((t, i) => (
+              <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 16px', borderBottom: i < Math.min(transactions.length, 12) - 1 ? '1px solid #F9FAFB' : 'none' }}>
+                <div style={{ width: 30, height: 30, borderRadius: 7, background: t.type === 'receita' ? '#D1FAE5' : t.type === 'despesa' ? '#FEE2E2' : '#F3F4F6', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  <Icon name="dollar" size={13} color={t.type === 'receita' ? '#065F46' : t.type === 'despesa' ? '#991B1B' : '#6B7280'} />
                 </div>
-              ))
-            }
-          </Card>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 500, color: '#111827', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.description ?? t.category ?? t.type}</div>
+                  <div style={{ fontSize: 11, color: '#9CA3AF' }}>{new Date(t.date + 'T12:00:00').toLocaleDateString('pt-BR')} · {t.payment_method ?? '—'}</div>
+                </div>
+                <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: t.type === 'receita' ? '#10B981' : t.type === 'despesa' ? '#EF4444' : '#6B7280' }}>
+                    {t.type === 'receita' ? '+' : t.type === 'despesa' ? '-' : ''}{fmtCurrency(Number(t.amount))}
+                  </div>
+                  <Badge variant={
+                    t.status === 'concluido' || t.status === 'finalizado' ? 'green' :
+                    t.status === 'pendente' ? 'yellow' :
+                    t.status === 'cancelado' ? 'gray' : 'blue'
+                  }>
+                    {t.status === 'concluido' || t.status === 'finalizado' ? 'Concluído' :
+                     t.status === 'pendente'  ? 'Pendente' :
+                     t.status === 'cancelado' ? 'Cancelado' : t.status}
+                  </Badge>
+                </div>
+              </div>
+            ))}
+          </div>
         </>
       )}
+
       {showAddTxn && <AddTransactionModal initialType={txnType} onClose={() => setShowAddTxn(false)} onSaved={() => { setShowAddTxn(false); loadTxns(period); }} />}
     </div>
   );
@@ -2491,6 +5591,7 @@ function Estoque() {
   const [showAddInv,   setShowAddInv]   = useState(false);
   const [showEntrada,  setShowEntrada]  = useState(false);
   const [showSaida,    setShowSaida]    = useState(false);
+  const [checkedInv,   setCheckedInv]   = useState<Set<string>>(new Set());
   const tabs = ['TODOS', 'ESTOQUE BAIXO', 'VENCE EM 30 DIAS', 'PRODUTOS VENCIDOS'];
 
   const load = () => {
@@ -2562,7 +5663,15 @@ function Estoque() {
               <tr style={{ background: '#F9FAFB', borderBottom: '1px solid #E5E7EB' }}>
                 {['', 'PRODUTO', 'CÓD.', 'QUANT.', 'VENCIMENTO', 'ESTOQUE MÍN.', 'STATUS'].map((h, i) => (
                   <th key={i} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 11, fontWeight: 600, color: '#9CA3AF', letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>
-                    {h === '' ? <input type="checkbox" /> : h}
+                    {h === '' ? (
+                      <input type="checkbox"
+                        checked={filtered.length > 0 && filtered.every(p => checkedInv.has(p.id))}
+                        onChange={e => {
+                          if (e.target.checked) setCheckedInv(new Set(filtered.map(p => p.id)));
+                          else setCheckedInv(new Set());
+                        }}
+                      />
+                    ) : h}
                   </th>
                 ))}
               </tr>
@@ -2576,7 +5685,16 @@ function Estoque() {
                     const isExpired = p.expiry_date && p.expiry_date < todayISO();
                     return (
                       <tr key={p.id} style={{ borderBottom: '1px solid #F3F4F6' }}>
-                        <td style={{ padding: '10px 12px' }}><input type="checkbox" /></td>
+                        <td style={{ padding: '10px 12px' }}>
+                          <input type="checkbox"
+                            checked={checkedInv.has(p.id)}
+                            onChange={e => setCheckedInv(prev => {
+                              const next = new Set(prev);
+                              if (e.target.checked) next.add(p.id); else next.delete(p.id);
+                              return next;
+                            })}
+                          />
+                        </td>
                         <td style={{ padding: '10px 12px', fontWeight: 500, color: '#111827' }}>{p.name}</td>
                         <td style={{ padding: '10px 12px', color: '#9CA3AF', fontFamily: 'monospace' }}>{p.code ?? '—'}</td>
                         <td style={{ padding: '10px 12px', color: '#374151' }}>{p.quantity} {p.unit ?? 'un'}</td>
@@ -2612,23 +5730,19 @@ function Estoque() {
 /* ─────────────────────────────────────────
    ADD APPOINTMENT MODAL
 ───────────────────────────────────────── */
-interface ProcedureItem { type: string; qty: number; }
+interface ProcedureItem { type: string; qty: number; price: number; }
 
-function AddAppointmentModal({ onClose, onSaved }: { onClose: () => void; onSaved?: () => void }) {
+function AddAppointmentModal({ onClose, onSaved, initialPatient }: { onClose: () => void; onSaved?: () => void; initialPatient?: Patient }) {
   const [mode, setMode]           = useState<'agendar' | 'bloquear'>('agendar');
-  const [procedures, setProcedures] = useState<ProcedureItem[]>([{ type: 'retorno', qty: 1 }]);
-  const [patientSearch, setPatientSearch] = useState('');
+  const [procedures, setProcedures] = useState<ProcedureItem[]>([{ type: 'consulta', qty: 1, price: 100 }]);
+  const [patientSearch, setPatientSearch] = useState(initialPatient?.name ?? '');
   const [patientResults, setPatientResults] = useState<Patient[]>([]);
-  const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
-  const [phone,    setPhone]    = useState('');
-  const [phoneRes, setPhoneRes] = useState('');
-  const [email,    setEmail]    = useState('');
-  const [insurance, setInsurance] = useState('');
+  const [selectedPatient, setSelectedPatient] = useState<Patient | null>(initialPatient ?? null);
+  const [insurance, setInsurance] = useState(initialPatient?.insurance ?? '');
   const [date,      setDate]      = useState(todayISO());
   const [startTime, setStartTime] = useState('08:00');
   const [endTime,   setEndTime]   = useState('08:15');
   const [recurrence, setRecurrence] = useState('nao');
-  const [payLink,  setPayLink]  = useState(false);
   const [notes,    setNotes]    = useState('');
   const [saving,   setSaving]   = useState(false);
 
@@ -2641,8 +5755,6 @@ function AddAppointmentModal({ onClose, onSaved }: { onClose: () => void; onSave
 
   useEffect(() => {
     if (!selectedPatient) return;
-    setPhone(selectedPatient.phone ?? '');
-    setEmail(selectedPatient.email ?? '');
     setInsurance(selectedPatient.insurance ?? 'Particular');
   }, [selectedPatient]);
 
@@ -2671,33 +5783,36 @@ function AddAppointmentModal({ onClose, onSaved }: { onClose: () => void; onSave
 
   const [saveError, setSaveError] = useState('');
 
+  const ctxDoctor = React.useContext(DoctorContext);
+
   const handleSave = async () => {
     if (mode === 'agendar' && !selectedPatient) return;
+    if (!startTime || !endTime) {
+      setSaveError('Informe o horário de início e fim.');
+      return;
+    }
     setSaving(true);
     setSaveError('');
 
-    // Busca qualquer médico; se não existir, cria o padrão
-    let { data: docs } = await supabase.from('doctors').select('id').limit(1);
-    let doctorId = docs?.[0]?.id;
-
+    // Usa o médico logado via contexto; fallback: busca o primeiro ativo
+    let doctorId: string | undefined = ctxDoctor.id || undefined;
     if (!doctorId) {
-      const { data: created, error: createErr } = await supabase
-        .from('doctors')
-        .upsert(
-          { name: 'guilherme teixeira', email: 'gt@medflow.com', specialty: 'Clínica Geral', crm: 'CRM-12345', role: 'admin', active: true },
-          { onConflict: 'email' }
-        )
-        .select('id')
-        .single();
-      if (createErr || !created) {
-        setSaveError('Não foi possível obter o médico: ' + (createErr?.message ?? 'tente novamente'));
-        setSaving(false);
-        return;
-      }
-      doctorId = created.id;
+      const { data: docs } = await supabase
+        .from('doctors').select('id').eq('active', true).limit(1);
+      doctorId = docs?.[0]?.id;
+    }
+    if (!doctorId) {
+      setSaveError('Nenhum médico encontrado. Configure um profissional antes de agendar.');
+      setSaving(false);
+      return;
     }
 
     if (mode === 'agendar' && selectedPatient) {
+      const totalAmount = procedures.reduce((s, p) => s + (p.price * p.qty), 0);
+      const encodedNotes = [
+        notes || '',
+        totalAmount > 0 ? `__val:${totalAmount}__` : '',
+      ].filter(Boolean).join('\n') || null;
       const { error } = await supabase.from('appointments').insert({
         patient_id: selectedPatient.id,
         doctor_id:  doctorId,
@@ -2707,7 +5822,7 @@ function AddAppointmentModal({ onClose, onSaved }: { onClose: () => void; onSave
         type:    procedures[0]?.type ?? 'consulta',
         status:  'agendado',
         insurance: insurance || null,
-        notes:   notes || null,
+        notes:   encodedNotes,
       });
       if (error) {
         setSaveError('Erro ao salvar: ' + error.message);
@@ -2722,23 +5837,23 @@ function AddAppointmentModal({ onClose, onSaved }: { onClose: () => void; onSave
   };
 
   const inp: CSSProperties = {
-    width: '100%', height: 36, border: '1px solid #D1D5DB', borderRadius: 6,
-    padding: '0 10px', fontSize: 13, color: '#111827', fontFamily: 'inherit',
+    width: '100%', height: 32, border: '1px solid #D1D5DB', borderRadius: 6,
+    padding: '0 9px', fontSize: 12, color: '#111827', fontFamily: 'inherit',
     outline: 'none', background: '#fff', boxSizing: 'border-box',
   };
-  const lbl: CSSProperties = { fontSize: 12, fontWeight: 500, color: '#374151', marginBottom: 4, display: 'block' };
+  const lbl: CSSProperties = { fontSize: 11, fontWeight: 500, color: '#374151', marginBottom: 3, display: 'block' };
   const canSave = mode === 'bloquear' || !!selectedPatient;
 
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 200, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: 56, overflowY: 'auto' }}>
-      <div style={{ background: '#fff', borderRadius: 10, width: 520, boxShadow: '0 20px 60px rgba(0,0,0,0.2)', marginBottom: 40, flexShrink: 0 }}>
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+      <div style={{ background: '#fff', borderRadius: 10, width: 480, maxHeight: '92vh', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 60px rgba(0,0,0,0.2)', flexShrink: 0 }}>
         {/* Header */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', borderBottom: '1px solid #E5E7EB' }}>
-          <span style={{ fontSize: 15, fontWeight: 600, color: '#111827' }}>Adicionar agendamento</span>
-          <button onClick={onClose} style={{ width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'none', border: 'none', cursor: 'pointer', fontSize: 20, color: '#9CA3AF', borderRadius: 6, fontFamily: 'inherit' }}>×</button>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', borderBottom: '1px solid #E5E7EB', flexShrink: 0 }}>
+          <span style={{ fontSize: 14, fontWeight: 600, color: '#111827' }}>Adicionar agendamento</span>
+          <button onClick={onClose} style={{ width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'none', border: 'none', cursor: 'pointer', fontSize: 20, color: '#9CA3AF', borderRadius: 6, fontFamily: 'inherit' }}>×</button>
         </div>
 
-        <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 10, overflowY: 'auto', flex: 1 }}>
           {/* Modo */}
           <div style={{ display: 'flex', gap: 24 }}>
             {modeOptions.map(({ val, text }) => (
@@ -2752,28 +5867,85 @@ function AddAppointmentModal({ onClose, onSaved }: { onClose: () => void; onSave
 
           {/* Procedimentos */}
           <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-              <span style={lbl}>Procedimentos</span>
-              <span style={{ fontSize: 12, color: '#9CA3AF' }}>Quant.</span>
-            </div>
-            {procedures.map((p, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#0066D0', flexShrink: 0 }} />
-                <select value={p.type}
-                  onChange={e => { const n = [...procedures]; n[i] = { ...n[i], type: e.target.value }; setProcedures(n); }}
-                  style={{ ...inp, flex: 1 }}>
-                  {PROC_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-                </select>
-                <input type="number" value={p.qty} min={1}
-                  onChange={e => { const n = [...procedures]; n[i] = { ...n[i], qty: +e.target.value }; setProcedures(n); }}
-                  style={{ ...inp, width: 56, textAlign: 'center', padding: '0 6px' }} />
-              </div>
-            ))}
-            <button onClick={() => setProcedures(prev => [...prev, { type: 'consulta', qty: 1 }])}
-              style={{ background: 'none', border: 'none', color: '#0066D0', fontSize: 12, fontWeight: 500, cursor: 'pointer', padding: 0, fontFamily: 'inherit' }}>
-              + Adicionar
+            <span style={lbl}>Procedimentos</span>
+
+            {procedures.map((p, i) => {
+              const code = `#${String(214744 + i * 1337).slice(0, 6)}`;
+              const lineTotal = p.price * p.qty;
+              return (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6,
+                  background: '#F9FAFB', border: '1px solid #E5E7EB', borderRadius: 8, padding: '6px 10px' }}>
+
+                  {/* Código */}
+                  <span style={{ fontSize: 11, color: '#9CA3AF', fontFamily: 'monospace',
+                    minWidth: 54, flexShrink: 0 }}>{code}</span>
+
+                  {/* Tipo */}
+                  <select value={p.type}
+                    onChange={e => { const n = [...procedures]; n[i] = { ...n[i], type: e.target.value }; setProcedures(n); }}
+                    style={{ ...inp, flex: 1, height: 28, fontSize: 12, padding: '0 6px' }}>
+                    {PROC_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                  </select>
+
+                  {/* Preço */}
+                  <div style={{ position: 'relative', width: 90, flexShrink: 0 }}>
+                    <span style={{ position: 'absolute', left: 7, top: '50%', transform: 'translateY(-50%)',
+                      fontSize: 11, color: '#6B7280', pointerEvents: 'none' }}>R$</span>
+                    <input type="number" min={0} step={0.01} value={p.price}
+                      onChange={e => { const n = [...procedures]; n[i] = { ...n[i], price: parseFloat(e.target.value) || 0 }; setProcedures(n); }}
+                      style={{ ...inp, height: 28, fontSize: 12, paddingLeft: 26, paddingRight: 4,
+                        textAlign: 'right', width: '100%' }} />
+                  </div>
+
+                  {/* Quantidade */}
+                  <input type="number" value={p.qty} min={1}
+                    onChange={e => { const n = [...procedures]; n[i] = { ...n[i], qty: Math.max(1, +e.target.value) }; setProcedures(n); }}
+                    style={{ ...inp, width: 44, height: 28, fontSize: 12, textAlign: 'center', padding: '0 4px', flexShrink: 0 }} />
+
+                  {/* Total linha */}
+                  <span style={{ fontSize: 12, fontWeight: 500, color: '#111827',
+                    minWidth: 72, textAlign: 'right', flexShrink: 0 }}>
+                    {lineTotal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                  </span>
+
+                  {/* Remover */}
+                  <button
+                    onClick={() => procedures.length > 1 && setProcedures(prev => prev.filter((_, j) => j !== i))}
+                    style={{ background: 'none', border: 'none', cursor: procedures.length > 1 ? 'pointer' : 'default',
+                      color: procedures.length > 1 ? '#EF4444' : '#D1D5DB',
+                      fontSize: 18, lineHeight: 1, padding: '0 2px', fontFamily: 'inherit', flexShrink: 0 }}>
+                    ×
+                  </button>
+                </div>
+              );
+            })}
+
+            <button onClick={() => setProcedures(prev => [...prev, { type: 'consulta', qty: 1, price: 100 }])}
+              style={{ background: 'none', border: 'none', color: '#0066D0', fontSize: 12,
+                fontWeight: 500, cursor: 'pointer', padding: 0, fontFamily: 'inherit' }}>
+              + Adicionar procedimento
             </button>
           </div>
+
+          {/* Valor total + aviso financeiro */}
+          {(() => {
+            const total = procedures.reduce((s, p) => s + p.price * p.qty, 0);
+            return (
+              <div style={{ background: '#F0FDF4', border: '1px solid #D1FAE5', borderRadius: 8,
+                padding: '10px 14px', display: 'flex', justifyContent: 'space-between',
+                alignItems: 'center', gap: 12 }}>
+                <span style={{ fontSize: 12, color: '#059669', lineHeight: 1.4 }}>
+                  Receita será lançada após finalização do atendimento.
+                </span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: '#111827', flexShrink: 0 }}>
+                  Valor total:{' '}
+                  <span style={{ color: '#059669' }}>
+                    {total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                  </span>
+                </span>
+              </div>
+            );
+          })()}
 
           {/* Paciente */}
           {mode === 'agendar' && (
@@ -2807,26 +5979,6 @@ function AddAppointmentModal({ onClose, onSaved }: { onClose: () => void; onSave
           )}
 
           {/* Telefones */}
-          {mode === 'agendar' && (
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-              <div>
-                <label style={lbl}>Telefone celular</label>
-                <input value={phone} onChange={e => setPhone(e.target.value)} placeholder="(__) ___-____" style={inp} />
-              </div>
-              <div>
-                <label style={lbl}>Telefone residencial <span style={{ color: '#9CA3AF', fontWeight: 400 }}>(opcional)</span></label>
-                <input value={phoneRes} onChange={e => setPhoneRes(e.target.value)} placeholder="(__) ___-____" style={inp} />
-              </div>
-            </div>
-          )}
-
-          {/* Email */}
-          {mode === 'agendar' && (
-            <div>
-              <label style={lbl}>E-mail <span style={{ color: '#9CA3AF', fontWeight: 400 }}>(opcional)</span></label>
-              <input value={email} onChange={e => setEmail(e.target.value)} type="email" style={inp} />
-            </div>
-          )}
 
           {/* Convênio */}
           {mode === 'agendar' && (
@@ -2849,7 +6001,7 @@ function AddAppointmentModal({ onClose, onSaved }: { onClose: () => void; onSave
             <input type="time" value={endTime} onChange={e => setEndTime(e.target.value)}
               style={{ ...inp, width: 90 }} />
             <button onClick={handleNextSlot} style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'none', border: 'none', color: '#0066D0', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', padding: 0, whiteSpace: 'nowrap' }}>
-              <Icon name="refresh" size={12} color="#0066D0" /> Próximo horário livre
+              <Icon name="refresh" size={12} color="#0066D0" /> Avançar 15 min
             </button>
           </div>
 
@@ -2861,47 +6013,36 @@ function AddAppointmentModal({ onClose, onSaved }: { onClose: () => void; onSave
               <option value="quinzenal">Quinzenal</option>
               <option value="mensal">Mensal</option>
             </select>
+            {recurrence !== 'nao' && (
+              <div style={{ marginTop: 5, fontSize: 11, color: '#D97706', display: 'flex', alignItems: 'center', gap: 4 }}>
+                ⚠️ Recorrência salva como referência — repetições futuras devem ser criadas manualmente.
+              </div>
+            )}
           </div>
 
-          {/* Gerar link de pagamento */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div style={{ width: 20, height: 20, borderRadius: '50%', background: '#0066D0', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: 12, color: '#fff', fontWeight: 700 }}>$</div>
-            <span style={{ fontSize: 13, color: '#374151', flex: 1 }}>Gerar link de pagamento</span>
-            <button onClick={() => setPayLink(p => !p)} style={{
-              width: 42, height: 24, borderRadius: 12, padding: 0,
-              background: payLink ? '#0066D0' : '#D1D5DB',
-              border: 'none', cursor: 'pointer', position: 'relative', transition: 'background 0.2s',
-            }}>
-              <div style={{
-                position: 'absolute', top: 4, width: 16, height: 16, borderRadius: '50%',
-                background: '#fff', transition: 'left 0.2s',
-                left: payLink ? 22 : 4, boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
-              }} />
-            </button>
-          </div>
 
           {/* Observações */}
           <div>
             <label style={lbl}>Observações <span style={{ color: '#9CA3AF', fontWeight: 400 }}>(opcional)</span></label>
-            <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={3}
-              style={{ ...inp, height: 'auto', padding: '8px 10px', resize: 'vertical' as const }} />
+            <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2}
+              style={{ ...inp, height: 'auto', padding: '6px 9px', resize: 'vertical' as const }} />
           </div>
         </div>
 
         {/* Footer */}
-        <div style={{ borderTop: '1px solid #E5E7EB', padding: '14px 20px' }}>
+        <div style={{ borderTop: '1px solid #E5E7EB', padding: '10px 16px', flexShrink: 0 }}>
           {saveError && (
-            <div style={{ fontSize: 12, color: '#EF4444', marginBottom: 10, padding: '8px 10px', background: '#FEF2F2', borderRadius: 6, border: '1px solid #FECACA' }}>
+            <div style={{ fontSize: 11, color: '#EF4444', marginBottom: 8, padding: '6px 10px', background: '#FEF2F2', borderRadius: 6, border: '1px solid #FECACA' }}>
               {saveError}
             </div>
           )}
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
-            <button onClick={onClose} style={{ height: 36, padding: '0 20px', background: '#fff', border: '1px solid #D1D5DB', borderRadius: 6, fontSize: 13, fontWeight: 500, color: '#374151', cursor: 'pointer', fontFamily: 'inherit' }}>
-              CANCELAR
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+            <button onClick={onClose} style={{ height: 32, padding: '0 16px', background: '#fff', border: '1px solid #D1D5DB', borderRadius: 6, fontSize: 12, fontWeight: 500, color: '#374151', cursor: 'pointer', fontFamily: 'inherit' }}>
+              Cancelar
             </button>
             <button onClick={handleSave} disabled={saving || !canSave}
-              style={{ height: 36, padding: '0 24px', background: canSave ? '#0066D0' : '#9CA3AF', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: canSave ? 'pointer' : 'not-allowed', fontFamily: 'inherit' }}>
-              {saving ? 'Salvando...' : 'SALVAR'}
+              style={{ height: 32, padding: '0 20px', background: canSave ? '#0066D0' : '#9CA3AF', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: canSave ? 'pointer' : 'not-allowed', fontFamily: 'inherit' }}>
+              {saving ? 'Salvando...' : 'Salvar'}
             </button>
           </div>
         </div>
@@ -2943,6 +6084,226 @@ function SenhaSection({ senha, setSenha, confirma, setConfirma }: {
   );
 }
 
+/* ─────────────────────────────────────────
+   SECRETARY MANAGEMENT (Controle de Acesso)
+───────────────────────────────────────── */
+function SecretaryManagement() {
+  type SecRow = { id: string; name: string; email: string; doctors: { id: string; name: string }[] };
+  const [rows,    setRows]    = useState<SecRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showAdd, setShowAdd] = useState(false);
+
+  const load = async () => {
+    setLoading(true);
+    const { data: secs } = await supabase
+      .from('doctors').select('id, name, email').eq('role', 'recepcionista').eq('active', true).order('name');
+    if (!secs) { setLoading(false); return; }
+    const ids = secs.map(s => s.id);
+    const { data: links } = ids.length
+      ? await supabase.from('secretary_doctors').select('secretary_id, doctors!doctor_id(id, name)').in('secretary_id', ids)
+      : { data: [] };
+    const map: Record<string, { id: string; name: string }[]> = {};
+    (links ?? []).forEach((l: any) => {
+      if (!map[l.secretary_id]) map[l.secretary_id] = [];
+      if (l.doctors) map[l.secretary_id].push({ id: l.doctors.id, name: l.doctors.name });
+    });
+    setRows(secs.map(s => ({ ...s, doctors: map[s.id] ?? [] })));
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, []);
+
+  return (
+    <div style={{ padding: '20px 0' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: '#111827' }}>Controle de Acesso</div>
+          <div style={{ fontSize: 12, color: '#9CA3AF', marginTop: 2 }}>Gerencie recepcionistas e os médicos que cada uma pode visualizar</div>
+        </div>
+        <button onClick={() => setShowAdd(true)} style={{ height: 34, padding: '0 16px', background: '#0066D0', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+          + Adicionar Recepcionista
+        </button>
+      </div>
+
+      {loading ? <Spinner /> : rows.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '40px 0', color: '#9CA3AF', fontSize: 13 }}>Nenhuma recepcionista cadastrada</div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {rows.map(r => (
+            <div key={r.id} style={{ background: '#fff', border: '1px solid #E5E7EB', borderRadius: 8, padding: '14px 18px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: '#111827' }}>{r.name}</div>
+                  <div style={{ fontSize: 12, color: '#6B7280', marginTop: 2 }}>{r.email}</div>
+                </div>
+                <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 99, background: '#EFF6FF', color: '#0066D0', fontWeight: 600 }}>Recepcionista</span>
+              </div>
+              {r.doctors.length > 0 ? (
+                <div style={{ marginTop: 10 }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: '#9CA3AF', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Acesso às agendas de:</div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {r.doctors.map(d => (
+                      <span key={d.id} style={{ fontSize: 12, padding: '3px 10px', borderRadius: 99, background: '#F3F4F6', color: '#374151', fontWeight: 500 }}>{d.name}</span>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div style={{ marginTop: 8, fontSize: 12, color: '#F59E0B', fontStyle: 'italic' }}>⚠ Sem médico vinculado — sem acesso a nenhuma agenda</div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {showAdd && <AddReceptionistModal onClose={() => { setShowAdd(false); load(); }} />}
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────
+   COMMISSION MANAGER
+───────────────────────────────────────── */
+function CommissionManager() {
+  type RecDoc = { id: string; name: string; email: string; commission_pct: number };
+  const [recs,    setRecs]    = useState<RecDoc[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editId,  setEditId]  = useState<string | null>(null);
+  const [pctDraft,setPctDraft]= useState('');
+  const [saving,  setSaving]  = useState(false);
+  const [period,  setPeriod]  = useState<'mes' | 'trimestre' | 'ano'>('mes');
+  const [summary, setSummary] = useState<{ rec_id: string; total: number; commission: number }[]>([]);
+
+  const load = async () => {
+    setLoading(true);
+    const { data } = await supabase
+      .from('doctors').select('id, name, email, commission_config').eq('role', 'recepcionista').eq('active', true).order('name');
+    setRecs((data ?? []).map((d: any) => ({
+      id: d.id, name: d.name, email: d.email,
+      commission_pct: d.commission_config?.value ?? 0,
+    })));
+    setLoading(false);
+  };
+
+  const loadSummary = async () => {
+    const now = new Date();
+    const fromDate = period === 'mes'
+      ? new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10)
+      : period === 'trimestre'
+      ? new Date(now.getFullYear(), now.getMonth() - 2, 1).toISOString().slice(0, 10)
+      : new Date(now.getFullYear(), 0, 1).toISOString().slice(0, 10);
+    const { data: txs } = await supabase
+      .from('transactions').select('amount, doctor_id').eq('type', 'receita').gte('date', fromDate);
+    const map: Record<string, number> = {};
+    (txs ?? []).forEach((t: any) => { if (t.doctor_id) map[t.doctor_id] = (map[t.doctor_id] ?? 0) + Number(t.amount); });
+    setSummary(recs.map(r => {
+      const total = map[r.id] ?? 0;
+      return { rec_id: r.id, total, commission: Math.round(total * r.commission_pct / 100 * 100) / 100 };
+    }));
+  };
+
+  useEffect(() => { load(); }, []);
+  useEffect(() => { if (recs.length) loadSummary(); }, [recs, period]);
+
+  const savePct = async (id: string) => {
+    setSaving(true);
+    const pct = parseFloat(pctDraft) || 0;
+    await supabase.from('doctors').update({ commission_config: { type: 'percentage', value: pct } }).eq('id', id);
+    setSaving(false); setEditId(null);
+    setRecs(prev => prev.map(r => r.id === id ? { ...r, commission_pct: pct } : r));
+  };
+
+  const PERIOD_LABELS = { mes: 'Este mês', trimestre: 'Trimestre', ano: 'Este ano' };
+
+  return (
+    <div style={{ padding: '20px 28px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: '#111827' }}>Comissões por Recepcionista</div>
+          <div style={{ fontSize: 12, color: '#9CA3AF', marginTop: 2 }}>% sobre consultas agendadas pela recepcionista</div>
+        </div>
+        <div style={{ display: 'flex', gap: 4 }}>
+          {(['mes','trimestre','ano'] as const).map(p => (
+            <button key={p} onClick={() => setPeriod(p)} style={{
+              height: 30, padding: '0 12px', borderRadius: 6, fontSize: 12, fontWeight: period === p ? 700 : 500,
+              background: period === p ? '#0066D0' : '#F3F4F6',
+              color: period === p ? '#fff' : '#6B7280',
+              border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+            }}>{PERIOD_LABELS[p]}</button>
+          ))}
+        </div>
+      </div>
+
+      {loading ? <Spinner /> : recs.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '40px 0', color: '#9CA3AF', fontSize: 13 }}>Nenhuma recepcionista cadastrada</div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {recs.map(r => {
+            const s = summary.find(x => x.rec_id === r.id);
+            const isEditing = editId === r.id;
+            return (
+              <div key={r.id} style={{ background: '#fff', border: '1px solid #E5E7EB', borderRadius: 10, padding: '16px 20px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                  <div style={{ width: 38, height: 38, borderRadius: '50%', background: '#EFF6FF', color: '#0066D0', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, flexShrink: 0 }}>
+                    {initials(r.name)}
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: '#111827' }}>{r.name}</div>
+                    <div style={{ fontSize: 12, color: '#9CA3AF' }}>{r.email}</div>
+                  </div>
+                  {/* Comissão % */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                    {isEditing ? (
+                      <>
+                        <input value={pctDraft} onChange={e => setPctDraft(e.target.value)} type="number" min="0" max="100" step="0.5"
+                          style={{ width: 64, height: 32, border: '1px solid #0066D0', borderRadius: 5, padding: '0 8px', fontSize: 13, fontFamily: 'inherit', outline: 'none', textAlign: 'right' }} />
+                        <span style={{ fontSize: 13, color: '#374151' }}>%</span>
+                        <button onClick={() => savePct(r.id)} disabled={saving}
+                          style={{ height: 32, padding: '0 12px', background: '#0066D0', color: '#fff', border: 'none', borderRadius: 5, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+                          {saving ? '...' : 'Salvar'}
+                        </button>
+                        <button onClick={() => setEditId(null)}
+                          style={{ height: 32, padding: '0 10px', background: '#F3F4F6', color: '#374151', border: 'none', borderRadius: 5, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
+                          Cancelar
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <div style={{ textAlign: 'right' }}>
+                          <div style={{ fontSize: 18, fontWeight: 800, color: r.commission_pct > 0 ? '#0066D0' : '#D1D5DB' }}>{r.commission_pct}%</div>
+                          <div style={{ fontSize: 10, color: '#9CA3AF' }}>por consulta</div>
+                        </div>
+                        <button onClick={() => { setEditId(r.id); setPctDraft(String(r.commission_pct)); }}
+                          style={{ height: 30, padding: '0 10px', background: '#F3F4F6', color: '#374151', border: 'none', borderRadius: 5, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
+                          ✏️ Editar
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+                {/* Resumo do período */}
+                {s && s.total > 0 && (
+                  <div style={{ marginTop: 12, display: 'flex', gap: 16, paddingTop: 12, borderTop: '1px solid #F3F4F6' }}>
+                    <div style={{ flex: 1, textAlign: 'center', padding: '8px 0', background: '#F9FAFB', borderRadius: 6 }}>
+                      <div style={{ fontSize: 11, color: '#9CA3AF', marginBottom: 2 }}>Receita no período</div>
+                      <div style={{ fontSize: 15, fontWeight: 700, color: '#374151' }}>{fmtCurrency(s.total)}</div>
+                    </div>
+                    <div style={{ flex: 1, textAlign: 'center', padding: '8px 0', background: '#F0FDF4', borderRadius: 6 }}>
+                      <div style={{ fontSize: 11, color: '#9CA3AF', marginBottom: 2 }}>Comissão a pagar</div>
+                      <div style={{ fontSize: 15, fontWeight: 700, color: '#10B981' }}>{fmtCurrency(s.commission)}</div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────
+   CLINICA SECTION
+───────────────────────────────────────── */
 function ClinicaSection({ ativa, setAtiva, adminClinica, setAdminClinica }: {
   ativa: boolean; setAtiva: (v: boolean) => void;
   adminClinica: boolean; setAdminClinica: (v: boolean) => void;
@@ -2994,8 +6355,21 @@ function AddReceptionistModal({ onClose }: { onClose: () => void }) {
   const handleSave = async () => {
     if (!emailR || !nomeR) return;
     setSaving(true);
-    await supabase.from('doctors').insert({ name: nomeR, email: emailR, role: 'recepcionista' });
+    const { data: rec } = await supabase
+      .from('doctors')
+      .insert({ name: nomeR, email: emailR, role: 'recepcionista', gender: sexoR || null, clinic_active: clinAtiva, clinic_admin: adminClin })
+      .select('id')
+      .single();
+    if (rec?.id) {
+      const linked = profs.filter(p => p.ativo);
+      if (linked.length > 0) {
+        await supabase.from('secretary_doctors').insert(
+          linked.map(p => ({ secretary_id: rec.id, doctor_id: p.id }))
+        );
+      }
+    }
     setSaving(false);
+    alert('Recepcionista cadastrada! Nota: o acesso ao sistema requer configuração manual da senha no painel Supabase (Authentication → Users).');
     onClose();
   };
 
@@ -3130,6 +6504,11 @@ function AddProfessionalModal({ onClose }: { onClose: () => void }) {
       specialty: profissao || null,
       crm: registro || null,
       role: tipo === 'admin' ? 'admin' : 'medico',
+      phone: celularD || null,
+      cpf: cpfD || null,
+      gender: sexoD || null,
+      clinic_active: clinAtiva,
+      clinic_admin: adminClin,
     });
     setSaving(false);
     onClose();
@@ -3307,40 +6686,41 @@ function AddProfessionalModal({ onClose }: { onClose: () => void }) {
 /* ─────────────────────────────────────────
    ADD PATIENT MODAL
 ───────────────────────────────────────── */
-function AddPatientModal({ onClose }: { onClose: () => void }) {
+function AddPatientModal({ onClose, onSaved, patient: editPatient }: { onClose: () => void; onSaved?: () => void; patient?: Patient }) {
+  const isEdit = !!editPatient;
   type PatientTab = 'dados' | 'complementares' | 'convenios';
   const [activeTab, setActiveTab] = useState<PatientTab>('dados');
   const [avatarPt, setAvatarPt] = useState('');
   const handleEditFotoPt = () => { const i=document.createElement('input'); i.type='file'; i.accept='image/*'; i.onchange=(e)=>{const f=(e.target as HTMLInputElement).files?.[0]; if(!f)return; const r=new FileReader(); r.onload=(ev)=>setAvatarPt(ev.target?.result as string); r.readAsDataURL(f);}; i.click(); };
 
-  const [nome,          setNome]          = useState('');
+  const [nome,          setNome]          = useState(editPatient?.name ?? '');
   const [codigo,        setCodigo]        = useState('');
-  const [dataNasc,      setDataNasc]      = useState('');
-  const [sexo,          setSexo]          = useState<'M' | 'F' | ''>('');
+  const [dataNasc,      setDataNasc]      = useState(editPatient?.birth_date ?? '');
+  const [sexo,          setSexo]          = useState<'M' | 'F' | ''>((editPatient?.gender as 'M'|'F'|'') ?? '');
   const [nomeCivil,     setNomeCivil]     = useState(false);
   const [generoOpc,     setGeneroOpc]     = useState(false);
-  const [emailP,        setEmailP]        = useState('');
-  const [cpf,           setCpf]           = useState('');
+  const [emailP,        setEmailP]        = useState(editPatient?.email ?? '');
+  const [cpf,           setCpf]           = useState(editPatient?.cpf ?? '');
   const [rg,            setRg]            = useState('');
-  const [obsP,          setObsP]          = useState('');
+  const [obsP,          setObsP]          = useState(editPatient?.notes ?? '');
   const [comoConheceu,  setComoConheceu]  = useState('');
-  const [celular,       setCelular]       = useState('');
+  const [celular,       setCelular]       = useState(editPatient?.phone ?? '');
   const [casa,          setCasa]          = useState('');
-  const [endereco,      setEndereco]      = useState('');
+  const [endereco,      setEndereco]      = useState(editPatient?.address ?? '');
   const [numero,        setNumero]        = useState('');
   const [complemento,   setComplemento]   = useState('');
   const [bairro,        setBairro]        = useState('');
-  const [cidade,        setCidade]        = useState('');
-  const [estado,        setEstado]        = useState('');
-  const [cep,           setCep]           = useState('');
-  const [convenio,      setConvenio]      = useState('');
-  const [numPlano,      setNumPlano]      = useState('');
+  const [cidade,        setCidade]        = useState(editPatient?.city ?? '');
+  const [estado,        setEstado]        = useState(editPatient?.state ?? '');
+  const [cep,           setCep]           = useState(editPatient?.zip_code ?? '');
+  const [convenio,      setConvenio]      = useState(editPatient?.insurance ?? '');
+  const [numPlano,      setNumPlano]      = useState(editPatient?.insurance_number ?? '');
   const [saving,        setSaving]        = useState(false);
 
   const handleSave = async () => {
     if (!nome) return;
     setSaving(true);
-    await supabase.from('patients').insert({
+    const payload = {
       name: nome,
       email: emailP || null,
       phone: celular || null,
@@ -3354,15 +6734,33 @@ function AddPatientModal({ onClose }: { onClose: () => void }) {
       state: estado || null,
       zip_code: cep || null,
       notes: obsP || null,
-    });
+    };
+    if (isEdit && editPatient) {
+      const { error } = await supabase.from('patients').update(payload).eq('id', editPatient.id);
+      if (error) {
+        console.error('Erro ao salvar:', error.message);
+        alert('Erro ao salvar. Tente novamente.');
+        setSaving(false);
+        return;
+      }
+    } else {
+      const { error } = await supabase.from('patients').insert({ ...payload, active: true });
+      if (error) {
+        console.error('Erro ao salvar:', error.message);
+        alert('Erro ao salvar. Tente novamente.');
+        setSaving(false);
+        return;
+      }
+    }
     setSaving(false);
+    onSaved?.();
     onClose();
   };
 
   const inp: CSSProperties = {
     width: '100%', height: 36, border: '1px solid #D1D5DB', borderRadius: 4,
     padding: '0 10px', fontSize: 13, color: '#111827', fontFamily: 'inherit',
-    outline: 'none', background: '#fff', boxSizing: 'border-box',
+    outline: 'none', background: '#fff', boxShadow: 'none', boxSizing: 'border-box',
   };
   const lbl: CSSProperties = { fontSize: 12, fontWeight: 500, color: '#374151', marginBottom: 4, display: 'block' };
   const req = <span style={{ color: '#EF4444' }}>*</span>;
@@ -3382,7 +6780,7 @@ function AddPatientModal({ onClose }: { onClose: () => void }) {
 
         {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 24px', borderBottom: '1px solid #E5E7EB' }}>
-          <span style={{ fontSize: 16, fontWeight: 600, color: '#111827' }}>Adicionar Paciente</span>
+          <span style={{ fontSize: 16, fontWeight: 600, color: '#111827' }}>{isEdit ? 'Editar Paciente' : 'Adicionar Paciente'}</span>
           <button onClick={onClose} style={{ width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'none', border: 'none', cursor: 'pointer', fontSize: 22, color: '#9CA3AF', borderRadius: 6, fontFamily: 'inherit' }}>×</button>
         </div>
 
@@ -3591,7 +6989,7 @@ function AddPatientModal({ onClose }: { onClose: () => void }) {
           </button>
           <button onClick={handleSave} disabled={saving || !nome}
             style={{ height: 36, padding: '0 24px', background: nome ? '#0066D0' : '#9CA3AF', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: nome ? 'pointer' : 'not-allowed', fontFamily: 'inherit' }}>
-            {saving ? 'Salvando...' : 'SALVAR'}
+            {saving ? 'Salvando...' : isEdit ? 'SALVAR ALTERAÇÕES' : 'SALVAR'}
           </button>
         </div>
       </div>
@@ -3621,11 +7019,31 @@ function AddTransactionModal({ initialType = 'receita', onClose, onSaved }: {
   const [selPt,     setSelPt]     = useState<Patient | null>(null);
   const [saving,    setSaving]    = useState(false);
   const [saveError, setSaveError] = useState('');
+  // Commission
+  const [allDoctors,   setAllDoctors]   = useState<{ id: string; name: string; commission_config: any }[]>([]);
+  const [selDoctorId,  setSelDoctorId]  = useState('');
+  const [commPreview,  setCommPreview]  = useState<number | null>(null);
 
   useEffect(() => {
     supabase.from('patients').select('id,name,phone').eq('active', true).order('name').limit(100)
       .then(({ data }) => setAllPts((data as Patient[]) ?? []));
+    supabase.from('doctors').select('id,name,commission_config').eq('active', true).order('name')
+      .then(({ data }) => setAllDoctors((data ?? []) as any[]));
   }, []);
+
+  // Live commission preview
+  useEffect(() => {
+    if (tipo !== 'receita' || !selDoctorId || !valor || parseFloat(valor) <= 0) {
+      setCommPreview(null); return;
+    }
+    const doc = allDoctors.find(d => d.id === selDoctorId);
+    const cfg = doc?.commission_config;
+    if (!cfg) { setCommPreview(null); return; }
+    const amt = parseFloat(valor.replace(',', '.'));
+    if (cfg.type === 'percentage') setCommPreview(Math.round(amt * cfg.value / 100 * 100) / 100);
+    else if (cfg.type === 'fixed') setCommPreview(cfg.value);
+    else setCommPreview(null);
+  }, [tipo, selDoctorId, valor, allDoctors]);
 
   useEffect(() => {
     if (!ptOpen) { setPtResults([]); return; }
@@ -3650,6 +7068,8 @@ function AddTransactionModal({ initialType = 'receita', onClose, onSaved }: {
       category: categoria || null, description: descricao || null,
       date: data, status, payment_method: pagamento || null,
       patient_id: selPt?.id || null, notes: notas || null,
+      doctor_id: selDoctorId || null,
+      // commission_amount e commission_status são calculados pelo trigger do Postgres
     });
     if (error) { setSaveError('Erro: ' + error.message); setSaving(false); return; }
     setSaving(false); onSaved?.(); onClose();
@@ -3757,6 +7177,29 @@ function AddTransactionModal({ initialType = 'receita', onClose, onSaved }: {
                     </div>
                   )}
                 </>
+              )}
+            </div>
+          )}
+          {/* Colaborador + Comissão (somente receita) */}
+          {tipo === 'receita' && (
+            <div>
+              <label style={lbl}>Colaborador <span style={{ color: '#9CA3AF', fontWeight: 400 }}>(para comissão)</span></label>
+              <select value={selDoctorId} onChange={e => setSelDoctorId(e.target.value)} style={inp}>
+                <option value="">Sem vinculação de comissão</option>
+                {allDoctors.map(d => (
+                  <option key={d.id} value={d.id}>
+                    {d.name}{d.commission_config
+                      ? ` (${d.commission_config.type === 'percentage' ? `${d.commission_config.value}%` : `R$ ${d.commission_config.value}`})`
+                      : ' (sem comissão)'}
+                  </option>
+                ))}
+              </select>
+              {commPreview !== null && (
+                <div style={{ marginTop: 6, padding: '6px 10px', background: '#F0FDF4', borderRadius: 6,
+                  border: '1px solid #BBF7D0', fontSize: 12, color: '#166534', fontWeight: 500 }}>
+                  💰 Comissão calculada: <strong>R$ {commPreview.toFixed(2).replace('.', ',')}</strong>
+                  &nbsp;·&nbsp;será registrada automaticamente
+                </div>
               )}
             </div>
           )}
@@ -3960,6 +7403,7 @@ function InventoryMovementModal({ tipo, onClose, onSaved }: { tipo: 'entrada'|'s
    WAITLIST MODAL
 ───────────────────────────────────────── */
 function WaitlistModal({ onClose, onSaved }: { onClose: () => void; onSaved?: () => void }) {
+  const doctor = React.useContext(DoctorContext);
   const [ptSearch, setPtSearch]   = useState('');
   const [ptResults, setPtResults] = useState<Patient[]>([]);
   const [selPt, setSelPt]         = useState<Patient | null>(null);
@@ -3982,8 +7426,7 @@ function WaitlistModal({ onClose, onSaved }: { onClose: () => void; onSaved?: ()
   const handleSave = async () => {
     if (!selPt) return;
     setSaving(true);
-    const { data: doc } = await supabase.from('doctors').select('id').limit(1);
-    await supabase.from('waitlist').insert({ patient_id: selPt.id, doctor_id: doc?.[0]?.id || null, preferred_period: periodo, notes: notas || null, status: 'aguardando' });
+    await supabase.from('waitlist').insert({ patient_id: selPt.id, doctor_id: doctor?.id || null, preferred_period: periodo, notes: notas || null, status: 'aguardando' });
     setSaving(false); onSaved?.(); onClose();
   };
 
@@ -4057,6 +7500,7 @@ function WaitlistModal({ onClose, onSaved }: { onClose: () => void; onSaved?: ()
    CONSULTA MODAL (Iniciar Atendimento)
 ───────────────────────────────────────── */
 function ConsultaModal({ patient, onClose, onSaved }: { patient: Patient; onClose: () => void; onSaved?: () => void }) {
+  const doctor = React.useContext(DoctorContext);
   const [queixa, setQueixa]       = useState('');
   const [evolucao, setEvolucao]   = useState('');
   const [diagnostico, setDiag]    = useState('');
@@ -4073,8 +7517,7 @@ function ConsultaModal({ patient, onClose, onSaved }: { patient: Patient; onClos
 
   const handleSave = async () => {
     setSaving(true); setSaveError('');
-    const { data: doc } = await supabase.from('doctors').select('id').limit(1);
-    const doctorId = doc?.[0]?.id;
+    const doctorId = doctor?.id;
     const { data: rec, error } = await supabase.from('medical_records').insert({
       patient_id: patient.id, doctor_id: doctorId || null,
       complaint: queixa || null, evolution: evolucao || null,
@@ -4176,10 +7619,12 @@ function ConsultaModal({ patient, onClose, onSaved }: { patient: Patient; onClos
 /* ─────────────────────────────────────────
    NOVA PRESCRIÇÃO MODAL
 ─────────────────────────────────────────── */
-function NovaPrescricaoModal({ patient, onClose, onSaved }: {
+function NovaPrescricaoModal({ patient, onClose, onSaved, initialItems }: {
   patient: Patient; onClose: () => void; onSaved?: () => void;
+  initialItems?: { med: string; dose: string; freq: string; dur: string }[];
 }) {
-  const [items,  setItems]  = useState([{ med: '', dose: '', freq: '', dur: '' }]);
+  const doctor = React.useContext(DoctorContext);
+  const [items,  setItems]  = useState(initialItems && initialItems.length > 0 ? initialItems : [{ med: '', dose: '', freq: '', dur: '' }]);
   const [saving, setSaving] = useState(false);
   const [error,  setError]  = useState('');
 
@@ -4192,8 +7637,7 @@ function NovaPrescricaoModal({ patient, onClose, onSaved }: {
     const valid = items.filter(it => it.med.trim());
     if (!valid.length) { setError('Adicione ao menos um medicamento.'); return; }
     setSaving(true); setError('');
-    const { data: doc } = await supabase.from('doctors').select('id').limit(1);
-    const doctorId = doc?.[0]?.id;
+    const doctorId = doctor?.id;
     for (const p of valid) {
       await supabase.from('prescriptions').insert({
         patient_id: patient.id, doctor_id: doctorId || null,
@@ -4270,6 +7714,7 @@ function NovaPrescricaoModal({ patient, onClose, onSaved }: {
 function EditConsultaModal({ patient, record, onClose, onSaved }: {
   patient: Patient; record: MedicalRecord; onClose: () => void; onSaved?: () => void;
 }) {
+  const doctor = React.useContext(DoctorContext);
   const [queixa,       setQueixa]       = useState(record.complaint      ?? '');
   const [evolucao,     setEvolucao]     = useState(record.evolution      ?? '');
   const [diagnostico,  setDiag]         = useState(record.diagnosis      ?? '');
@@ -4303,8 +7748,7 @@ function EditConsultaModal({ patient, record, onClose, onSaved }: {
     }).eq('id', record.id);
     if (error) { setSaveError('Erro: ' + error.message); setSaving(false); return; }
     await supabase.from('prescriptions').delete().eq('medical_record_id', record.id);
-    const { data: doc } = await supabase.from('doctors').select('id').limit(1);
-    const doctorId = doc?.[0]?.id;
+    const doctorId = doctor?.id;
     for (const p of prescricoes.filter(p => p.med.trim())) {
       await supabase.from('prescriptions').insert({
         patient_id: patient.id, medical_record_id: record.id, doctor_id: doctorId || null,
@@ -4583,19 +8027,35 @@ function Relatorios() {
    CONFIGURAÇÕES SCREEN
 ───────────────────────────────────────── */
 function Configuracoes() {
-  type CTab = 'perfil' | 'clinica' | 'horarios' | 'notificacoes';
-  const [activeTab, setActiveTab] = useState<CTab>('perfil');
-  const [nome, setNome]           = useState('guilherme teixeira');
-  const [email, setEmail]         = useState('gt@medflow.com');
-  const [crm, setCrm]             = useState('CRM-12345');
-  const [especialidade, setEsp]   = useState('Clínica Geral');
-  const [celular, setCelular]     = useState('');
-  const [saving, setSaving]       = useState(false);
-  const [saved, setSaved]         = useState(false);
-  const [avatarUrl, setAvatarUrl] = useState('');
+  const ctx = React.useContext(DoctorContext);
+  type CTab = 'perfil' | 'clinica' | 'horarios' | 'notificacoes' | 'acesso' | 'comissoes';
+  const [activeTab,    setActiveTab]   = useState<CTab>('perfil');
+  const [doctorId,     setDoctorId]    = useState('');
+  const [nome,         setNome]        = useState(ctx.name);
+  const [email,        setEmail]       = useState(ctx.email);
+  const [crm,          setCrm]         = useState(ctx.crm);
+  const [especialidade,setEsp]         = useState(ctx.specialty);
+  const [celular,      setCelular]     = useState(ctx.phone ?? '');
+  const [saving,       setSaving]      = useState(false);
+  const [saved,        setSaved]       = useState(false);
+  const [avatarUrl,    setAvatarUrl]   = useState('');
+
+  // Carrega dados reais do médico ao montar
+  useEffect(() => {
+    supabase.from('doctors').select('*').eq('active', true).order('created_at').limit(1).single()
+      .then(({ data }) => {
+        if (!data) return;
+        setDoctorId(data.id);
+        setNome(data.name);
+        setEmail(data.email);
+        setCrm(data.crm ?? '');
+        setEsp(data.specialty ?? '');
+        setCelular(data.phone ?? '');
+      });
+  }, []);
 
   // Clínica
-  const [clinNome,    setClinicNome]   = useState(() => localStorage.getItem('clin_nome')    ?? 'Clínica guilherme teixeira');
+  const [clinNome,    setClinicNome]   = useState(() => localStorage.getItem('clin_nome')    ?? `Clínica ${ctx.name}`);
   const [clinCnpj,    setClinicCnpj]   = useState(() => localStorage.getItem('clin_cnpj')    ?? '');
   const [clinCnes,    setClinicCnes]   = useState(() => localStorage.getItem('clin_cnes')    ?? '');
   const [clinEndereco,setClinicEnd]    = useState(() => localStorage.getItem('clin_end')     ?? '');
@@ -4658,7 +8118,12 @@ function Configuracoes() {
 
   const handleSavePerfil = async () => {
     setSaving(true);
-    await supabase.from('doctors').update({ name:nome, email, crm, specialty:especialidade }).eq('email','gt@medflow.com');
+    if (doctorId) {
+      await supabase.from('doctors').update({ name: nome, email, crm, specialty: especialidade, phone: celular }).eq('id', doctorId);
+    } else {
+      // Fallback: atualiza pelo email original
+      await supabase.from('doctors').update({ name: nome, email, crm, specialty: especialidade, phone: celular }).eq('active', true);
+    }
     setSaving(false); setSaved(true); setTimeout(() => setSaved(false), 2200);
   };
 
@@ -4667,6 +8132,8 @@ function Configuracoes() {
   const CTABS: {id:CTab;label:string}[] = [
     {id:'perfil',label:'Meu Perfil'},{id:'clinica',label:'Clínica'},
     {id:'horarios',label:'Horários de Atendimento'},{id:'notificacoes',label:'Notificações'},
+    {id:'acesso',    label:'Controle de Acesso'},
+    {id:'comissoes', label:'Comissões'},
   ];
 
   return (
@@ -4770,6 +8237,18 @@ function Configuracoes() {
           </div>
         )}
 
+        {activeTab === 'acesso' && (
+          <div>
+            <SecretaryManagement />
+          </div>
+        )}
+
+        {activeTab === 'comissoes' && (
+          <div style={{ margin: '-24px -28px' }}>
+            <CommissionManager />
+          </div>
+        )}
+
         {activeTab === 'notificacoes' && (
           <div style={{ maxWidth:520 }}>
             <div style={{ fontSize:16, fontWeight:600, color:'#111827', marginBottom:6 }}>Notificações</div>
@@ -4804,11 +8283,11 @@ function Configuracoes() {
    APP ROOT
 ───────────────────────────────────────── */
 export default function MedFlow() {
-  const [screen,    setScreen]    = useState<NavId>('dashboard');
+  const [screen,    setScreen]    = useState<NavId>('agenda');
   const [tabs,      setTabs]      = useState<Tab[]>([
-    { id: 'dashboard', label: 'Painel', icon: 'grid', closeable: false },
+    { id: 'agenda', label: 'Agenda', icon: 'calendar', closeable: false },
   ]);
-  const [activeTab, setActiveTab] = useState<NavId>('dashboard');
+  const [activeTab, setActiveTab] = useState<NavId>('agenda');
   const [agendaBadge, setAgendaBadge] = useState(0);
   const [notifCount,  setNotifCount]  = useState(0);
   const [showAddAppointment,  setShowAddAppointment]  = useState(false);
@@ -4817,8 +8296,27 @@ export default function MedFlow() {
   const [showAddReceptionist, setShowAddReceptionist] = useState(false);
   const [agendaKey,           setAgendaKey]           = useState(0);
   const [prontuarioPatientId, setProntuarioPatientId] = useState<string | undefined>();
+  const [doctor, setDoctor] = useState<DoctorInfo>({
+    id: '', name: 'guilherme teixeira', email: 'gt@medflow.com',
+    specialty: 'Clínica Geral', crm: 'CRM-12345',
+  });
 
   useEffect(() => {
+    // Carrega dados do médico logado (tenta usuário autenticado primeiro)
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      const email = user?.email;
+      const q = email
+        ? supabase.from('doctors').select('*').eq('email', email).eq('active', true).limit(1).single()
+        : supabase.from('doctors').select('*').eq('active', true).order('created_at').limit(1).single();
+      q.then(({ data }) => {
+        if (data) setDoctor({
+          id: data.id, name: data.name, email: data.email,
+          specialty: data.specialty ?? 'Clínica Geral',
+          crm: data.crm ?? '', phone: data.phone ?? '',
+        });
+      });
+    });
+
     // Contagem real de agendamentos aguardando hoje
     supabase.from('appointments')
       .select('id', { count: 'exact', head: true })
@@ -4858,7 +8356,7 @@ export default function MedFlow() {
   };
 
   const screenMap: Partial<Record<NavId, React.ReactNode>> = {
-    dashboard:    <Dashboard onNavigateProntuario={handleNavigateProntuario} />,
+    dashboard:    <Dashboard onNavigateProntuario={handleNavigateProntuario} onNewAppointment={() => setShowAddAppointment(true)} onNewPatient={() => setShowAddPatient(true)} onNavigate={(s) => handleNavigate(s as any)} />,
     agenda:       <Agenda key={agendaKey} />,
     prontuario:   <Prontuario key={prontuarioPatientId} initialPatientId={prontuarioPatientId} />,
     pacientes:    <Pacientes onNavigateProntuario={handleNavigateProntuario} />,
@@ -4869,24 +8367,26 @@ export default function MedFlow() {
   };
 
   return (
-    <div style={{ display: 'flex', height: '100%', fontFamily: 'Inter, sans-serif' }}>
-      <Sidebar active={screen} onNavigate={handleNavigate} agendaBadge={agendaBadge} />
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        <Topbar screen={screen} notifCount={notifCount}
-          onNewAppointment={() => setShowAddAppointment(true)}
-          onNewPatient={() => setShowAddPatient(true)}
-          onNewProfessional={() => setShowAddProfessional(true)}
-          onNewReceptionist={() => setShowAddReceptionist(true)}
-        />
-        <InternalTabs tabs={tabs} activeTab={activeTab} onSelect={handleNavigate} onClose={handleCloseTab} />
-        <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-          {screenMap[screen] ?? <Dashboard />}
+    <DoctorContext.Provider value={doctor}>
+      <div style={{ display: 'flex', height: '100%', fontFamily: 'Inter, sans-serif' }}>
+        <Sidebar active={screen} onNavigate={handleNavigate} agendaBadge={agendaBadge} />
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <Topbar screen={screen} notifCount={notifCount}
+            onNewAppointment={() => setShowAddAppointment(true)}
+            onNewPatient={() => setShowAddPatient(true)}
+            onNewProfessional={() => setShowAddProfessional(true)}
+            onNewReceptionist={() => setShowAddReceptionist(true)}
+          />
+          <InternalTabs tabs={tabs} activeTab={activeTab} onSelect={handleNavigate} onClose={handleCloseTab} />
+          <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+            {screenMap[screen] ?? <Agenda />}
+          </div>
         </div>
+        {showAddAppointment  && <AddAppointmentModal  onClose={() => setShowAddAppointment(false)} onSaved={() => setAgendaKey(k => k + 1)} />}
+        {showAddPatient      && <AddPatientModal      onClose={() => setShowAddPatient(false)} />}
+        {showAddProfessional && <AddProfessionalModal onClose={() => setShowAddProfessional(false)} />}
+        {showAddReceptionist && <AddReceptionistModal onClose={() => setShowAddReceptionist(false)} />}
       </div>
-      {showAddAppointment  && <AddAppointmentModal  onClose={() => setShowAddAppointment(false)} onSaved={() => setAgendaKey(k => k + 1)} />}
-      {showAddPatient      && <AddPatientModal      onClose={() => setShowAddPatient(false)} />}
-      {showAddProfessional && <AddProfessionalModal onClose={() => setShowAddProfessional(false)} />}
-      {showAddReceptionist && <AddReceptionistModal onClose={() => setShowAddReceptionist(false)} />}
-    </div>
+    </DoctorContext.Provider>
   );
 }
