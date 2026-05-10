@@ -4830,14 +4830,16 @@ function EHRAtendimento({ appt, patient: patientProp, onClose }: {
   const patientId   = appt?.patient_id ?? patientProp?.id ?? '';
   const isApptMode  = !!appt;
 
-  const [elapsed,   setElapsed]   = useState(0);
-  const [isEmpty,   setIsEmpty]   = useState(true);
-  const [saving,    setSaving]    = useState(false);
-  const [autoSaved, setAutoSaved] = useState<string>('');   // '' | 'saving' | 'saved'
-  const [showPresc, setShowPresc] = useState(false);
-  const [atestDias, setAtestDias] = useState('1');
-  const [records,   setRecords]   = useState<MedicalRecord[]>([]);
-  const [activeTab, setActiveTab] = useState<'Atendimento'|'Prontuário'|'Relacionamento'|'Arquivos'>('Atendimento');
+  const [elapsed,         setElapsed]         = useState(0);
+  const [isEmpty,         setIsEmpty]         = useState(true);
+  const [saving,          setSaving]          = useState(false);
+  const [autoSaved,       setAutoSaved]       = useState<string>('');   // '' | 'saving' | 'saved'
+  const [showPresc,       setShowPresc]       = useState(false);
+  const [atestDias,       setAtestDias]       = useState('1');
+  const [records,         setRecords]         = useState<MedicalRecord[]>([]);
+  const [activeTab,       setActiveTab]       = useState<'Atendimento'|'Prontuário'|'Relacionamento'|'Arquivos'>('Atendimento');
+  const [showEditPatient, setShowEditPatient] = useState(false);
+  const [localPatient,    setLocalPatient]    = useState<Patient | null>(null);
 
   /* ── Timer (somente modo agendamento) ── */
   useEffect(() => {
@@ -4867,6 +4869,9 @@ function EHRAtendimento({ appt, patient: patientProp, onClose }: {
     if (r.conduct)          parts.push(`<h3>Conduta</h3><p>${r.conduct}</p>`);
     return parts.join('');
   };
+
+  /* ── Sync localPatient from patientData ── */
+  useEffect(() => { setLocalPatient(patientData); }, [patientId]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ── Load records ── */
   useEffect(() => {
@@ -5042,90 +5047,219 @@ function EHRAtendimento({ appt, patient: patientProp, onClose }: {
       `}</style>
 
       {/* ══ LEFT SIDEBAR ══ */}
-      <aside style={{ borderRight: '1px solid var(--color-border, #e2e8f0)',
-        background: 'var(--color-card, #fff)', overflowY: 'auto',
-        display: 'flex', flexDirection: 'column' }}>
+      <aside style={{ width: 230, borderRight: '1px solid #E5E7EB', background: '#F9FAFB',
+        overflowY: 'auto', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
 
         {/* Back */}
-        <div style={{ padding: '12px 14px', flexShrink: 0 }}>
-          <button onClick={onClose} className="ehr-action-secondary" style={{ fontSize: 12, height: 30 }}>
+        <div style={{ padding: '10px 12px 6px' }}>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer',
+            fontSize: 12, color: '#6B7280', fontFamily: 'inherit', display: 'flex',
+            alignItems: 'center', gap: 4, padding: 0 }}>
             ← Voltar
           </button>
         </div>
 
-        {/* Avatar + name */}
-        <div style={{ padding: '6px 14px 16px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-          <div style={{ width: 88, height: 88, borderRadius: '50%',
-            border: '2px solid var(--color-primary, #2563eb)',
-            background: 'var(--color-accent, #f0f4ff)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: 26, fontWeight: 700, color: 'var(--color-primary, #2563eb)' }}>
-            {patientData ? initials(patientData.name) : '?'}
+        {/* Avatar section */}
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center',
+          padding: '8px 14px 14px', position: 'relative' }}>
+
+          {/* Ativo badge */}
+          <div style={{ position: 'absolute', top: 8, right: 14,
+            background: '#10B981', color: '#fff', borderRadius: 9999,
+            fontSize: 10, fontWeight: 700, padding: '2px 8px',
+            display: 'flex', alignItems: 'center', gap: 3 }}>
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
+            {(localPatient ?? patientData)?.active !== false ? 'Ativo' : 'Inativo'}
           </div>
+
+          {/* Circular avatar */}
+          <div style={{ width: 90, height: 90, borderRadius: '50%',
+            border: '2px solid #10B981', background: '#E5E7EB', overflow: 'hidden',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', marginTop: 4 }}>
+            <svg viewBox="0 0 100 100" width="90" height="90" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <circle cx="50" cy="50" r="50" fill="#E5E7EB"/>
+              <circle cx="50" cy="38" r="18" fill="#9CA3AF"/>
+              <ellipse cx="50" cy="82" rx="28" ry="20" fill="#9CA3AF"/>
+            </svg>
+          </div>
+
+          {/* Name + age */}
           <div style={{ marginTop: 10, textAlign: 'center' }}>
-            <p style={{ margin: '0 0 2px', fontSize: 13, fontWeight: 700,
-              color: 'var(--color-foreground, #0f172a)', lineHeight: 1.3 }}>
-              {patientData?.name ?? '—'}
-            </p>
-            {patientData?.birth_date && (
-              <p style={{ margin: 0, fontSize: 12, color: 'var(--color-muted-foreground, #64748b)' }}>
-                {calcAgeDetailed(patientData.birth_date)}
-              </p>
+            <div style={{ fontSize: 14, fontWeight: 700, color: '#111827' }}>
+              {(localPatient ?? patientData)?.name ?? '—'}
+            </div>
+            {(localPatient ?? patientData)?.birth_date && (
+              <div style={{ fontSize: 12, color: '#6B7280', marginTop: 2 }}>
+                {calcAgeDetailed((localPatient ?? patientData)!.birth_date!)}
+              </div>
             )}
           </div>
 
-          {/* Insurance badge */}
-          {(patientData?.insurance || appt?.insurance) && (
-            <div style={{ marginTop: 8, padding: '3px 10px',
-              background: 'var(--color-accent, #f0f4ff)',
-              color: 'var(--color-accent-foreground, #1d4ed8)',
-              borderRadius: 9999, fontSize: 11, fontWeight: 600 }}>
-              {patientData?.insurance ?? appt?.insurance}
-            </div>
-          )}
+          {/* Status button */}
+          <button style={{ marginTop: 10, width: '100%', height: 34,
+            background: isApptMode ? '#FB7185' : '#0066D0',
+            color: '#fff', border: 'none', borderRadius: 20, fontSize: 12,
+            fontWeight: 600, cursor: 'default', fontFamily: 'inherit',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+            </svg>
+            {isApptMode ? 'Em atendimento' : 'Iniciar atendimento'}
+          </button>
 
-          {/* Timer pill — appt mode only */}
-          {isApptMode && (
-            <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 6,
-              padding: '5px 14px', background: '#F8FAFF', borderRadius: 20, border: '1px solid #E0E9FF' }}>
-              <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#10B981',
-                boxShadow: '0 0 0 2px rgba(16,185,129,.2)' }} />
-              <span style={{ fontSize: 13, fontWeight: 700, color: '#0066D0',
-                fontVariantNumeric: 'tabular-nums' }}>
-                {fmtElapsed(elapsed)}
-              </span>
+          {/* Editar button */}
+          <button onClick={() => setShowEditPatient(true)} style={{ marginTop: 8, width: '100%',
+            height: 32, background: '#fff', color: '#374151',
+            border: '1px solid #D1D5DB', borderRadius: 20, fontSize: 12,
+            fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+            </svg>
+            Editar
+          </button>
+        </div>
+
+        {/* Retorno esperado */}
+        <div style={{ padding: '10px 14px', borderTop: '1px solid #E5E7EB', background: '#fff' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: 12, fontWeight: 500, color: '#374151' }}>Retorno esperado para:</span>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#6B7280"
+              strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ cursor: 'pointer' }}>
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+            </svg>
+          </div>
+          {records[0]?.return_date && (
+            <div style={{ fontSize: 12, color: '#6B7280', marginTop: 4 }}>
+              {new Date(records[0].return_date + 'T12:00:00').toLocaleDateString('pt-BR')}
             </div>
           )}
         </div>
 
-        {/* Contact info */}
-        <div style={{ padding: '14px', borderTop: '1px solid var(--color-border, #e2e8f0)', flex: 1 }}>
-          <p style={{ margin: '0 0 10px', fontSize: 11, fontWeight: 700,
-            color: 'var(--color-muted-foreground, #64748b)',
-            textTransform: 'uppercase', letterSpacing: '.05em' }}>
-            Dados do paciente
-          </p>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12,
-            color: 'var(--color-muted-foreground, #64748b)' }}>
-            {patientData?.phone && (
-              <p style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
-                📞 {patientData.phone}
-              </p>
-            )}
-            {patientData?.birth_date && (
-              <p style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
-                📅 {new Date(patientData.birth_date + 'T12:00:00').toLocaleDateString('pt-BR')}
-              </p>
-            )}
-            {appt?.type && (
-              <p style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
-                🩺 {TYPE_LABEL[appt.type] ?? appt.type}
-                {appt.start_time && ` · ${appt.start_time.slice(0, 5)}`}
-              </p>
-            )}
+        {/* Stats */}
+        <div style={{ padding: '10px 14px', borderTop: '1px solid #E5E7EB', background: '#fff',
+          display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {[
+            { label: 'Consultas realizadas', value: records.length },
+            { label: 'Número de faltas',     value: 0 },
+            { label: 'Número de remarcações',value: 0 },
+          ].map(({ label, value }) => (
+            <div key={label} style={{ display: 'flex', alignItems: 'center',
+              justifyContent: 'space-between', paddingBottom: 8,
+              borderBottom: '1px solid #F3F4F6', fontSize: 12, color: '#374151' }}>
+              <span>{label}:</span>
+              <span style={{ minWidth: 22, height: 22, background: '#2563EB', color: '#fff',
+                borderRadius: 9999, fontSize: 11, fontWeight: 700,
+                display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 6px' }}>
+                {value}
+              </span>
+            </div>
+          ))}
+        </div>
+
+        {/* Dados do paciente */}
+        <div style={{ padding: '10px 14px', borderTop: '1px solid #E5E7EB', background: '#fff', flex: 1 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#111827', marginBottom: 10 }}>
+            Dados do paciente:
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+
+            {/* Birth date */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: '#374151' }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6B7280"
+                strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="4" width="18" height="18" rx="2"/>
+                <line x1="16" y1="2" x2="16" y2="6"/>
+                <line x1="8" y1="2" x2="8" y2="6"/>
+                <line x1="3" y1="10" x2="21" y2="10"/>
+              </svg>
+              {(localPatient ?? patientData)?.birth_date
+                ? new Date((localPatient ?? patientData)!.birth_date! + 'T12:00:00').toLocaleDateString('pt-BR')
+                : 'Não informado'}
+            </div>
+
+            {/* Gender */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: '#374151' }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6B7280"
+                strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="11" r="4"/>
+                <line x1="12" y1="15" x2="12" y2="23"/>
+                <line x1="9" y1="20" x2="15" y2="20"/>
+                <line x1="17" y1="3" x2="23" y2="3"/>
+                <line x1="20" y1="3" x2="20" y2="9"/>
+                <line x1="17" y1="6" x2="23" y2="6"/>
+              </svg>
+              {(localPatient ?? patientData)?.gender === 'M' ? 'MASCULINO'
+                : (localPatient ?? patientData)?.gender === 'F' ? 'FEMININO'
+                : 'Não informado'}
+            </div>
+
+            {/* Race/ethnicity (not in DB yet — placeholder) */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: '#374151' }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6B7280"
+                strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                <circle cx="9" cy="7" r="4"/>
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+                <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+              </svg>
+              {(localPatient ?? patientData as any)?.race ?? 'Não informado'}
+            </div>
+
+            {/* Responsible doctor */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: '#374151' }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6B7280"
+                strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                <circle cx="12" cy="7" r="4"/>
+              </svg>
+              {doctor.name ?? 'Não informado'}
+            </div>
+
+            {/* Responsible / guardian */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: '#6B7280' }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9CA3AF"
+                strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                <circle cx="12" cy="7" r="4"/>
+              </svg>
+              Não informado
+            </div>
+
+            {/* Occupation */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, color: '#6B7280' }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9CA3AF"
+                strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="2" y="7" width="20" height="14" rx="2"/>
+                <path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>
+              </svg>
+              {(localPatient ?? patientData as any)?.occupation ?? ''}
+            </div>
+
           </div>
         </div>
       </aside>
+
+      {/* Edit patient modal */}
+      {showEditPatient && (localPatient ?? patientData) && (
+        <AddPatientModal
+          patient={localPatient ?? patientData ?? undefined}
+          onClose={() => setShowEditPatient(false)}
+          onSaved={async () => {
+            setShowEditPatient(false);
+            const pid = patientId;
+            const { data } = await supabase.from('patients').select('*').eq('id', pid).single();
+            if (data) setLocalPatient(data as Patient);
+          }}
+        />
+      )}
 
       {/* ══ MAIN CONTENT ══ */}
       <main style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden',
