@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase';
 import { useAllowedDoctors, applyDoctorFilter } from '@/lib/useAllowedDoctors';
 import { TYPE_META, STATUS_META } from '@/components/calendar/utils';
 import DOMPurify from 'dompurify';
+import ShineSweep from '@/components/ShineSweep';
 import {
   DndContext, DragOverlay, useDroppable, useDraggable,
   MouseSensor, TouchSensor, useSensors, useSensor,
@@ -136,16 +137,15 @@ const DoctorContext = React.createContext<DoctorInfo>({
 function Sidebar({ active, onNavigate, agendaBadge }: { active: NavId; onNavigate: (id: NavId) => void; agendaBadge: number }) {
   const doctor = React.useContext(DoctorContext);
   return (
-    <aside style={{
-      width: 220, background: '#1E2130', display: 'flex', flexDirection: 'column',
+    <aside className="bg-white border-r border-gray-200 shadow-sm" style={{
+      width: 220, display: 'flex', flexDirection: 'column',
       flexShrink: 0, height: '100%', overflow: 'hidden',
     }}>
-      <div style={{ padding: '20px 20px 16px', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <span style={{ fontSize: 22, fontWeight: 700, color: '#60A5FA', letterSpacing: '-0.03em' }}>Med</span>
-          <span style={{ fontSize: 22, fontWeight: 700, color: '#2DD4BF', letterSpacing: '-0.03em' }}>Flow</span>
+      <div style={{ padding: '20px 20px 16px', borderBottom: '1px solid rgba(111,101,232,0.15)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'center' }}>
+          <img src="/logomarca_recortada.png" alt="MedCore" style={{ height: 64, width: 'auto', display: 'block' }} />
         </div>
-        <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.3)', marginTop: 2 }}>Sistema Médico</div>
+        <div style={{ fontSize: 11, color: 'rgba(100,116,139,0.7)', marginTop: 2, fontWeight: 500 }}>Sistema Médico</div>
       </div>
 
       <nav style={{ flex: 1, padding: '12px 10px', display: 'flex', flexDirection: 'column', gap: 2, overflowY: 'auto' }}>
@@ -156,13 +156,13 @@ function Sidebar({ active, onNavigate, agendaBadge }: { active: NavId; onNavigat
             <button key={item.id} onClick={() => onNavigate(item.id)} style={{
               display: 'flex', alignItems: 'center', gap: 10, padding: '9px 10px',
               borderRadius: 7, cursor: 'pointer', fontSize: 13, width: '100%',
-              background: isActive ? 'rgba(96,165,250,0.15)' : 'none',
-              color: isActive ? '#60A5FA' : 'rgba(255,255,255,0.55)',
-              border: 'none', fontFamily: 'inherit', fontWeight: isActive ? 600 : 400,
-              borderLeft: `3px solid ${isActive ? '#60A5FA' : 'transparent'}`,
+              background: isActive ? 'rgba(111,101,232,0.10)' : 'transparent',
+              color: isActive ? '#6F65E8' : '#1E293B',
+              border: 'none', fontFamily: 'inherit', fontWeight: isActive ? 600 : 500,
+              borderLeft: `3px solid ${isActive ? '#6F65E8' : 'transparent'}`,
               transition: 'all 0.1s', textAlign: 'left',
             }}>
-              <Icon name={item.icon} size={15} color={isActive ? '#60A5FA' : 'rgba(255,255,255,0.4)'} />
+              <Icon name={item.icon} size={15} color={isActive ? '#6F65E8' : '#64748B'} />
               <span style={{ flex: 1 }}>{item.label}</span>
               {badge !== undefined && badge > 0 && (
                 <span style={{
@@ -994,43 +994,43 @@ function Dashboard({ onNavigateProntuario, onNewAppointment, onNewPatient, onNav
                 <div className="flex gap-2 flex-wrap">
                   {heroAppt.status === 'agendado' && <>
                     <button onClick={() => updateStatus(heroAppt.id,'confirmado')}
-                      style={{ flex:1, height:32, background:'#fff', color:'#1D4ED8', border:'none', borderRadius:8, fontSize:12, fontWeight:700, cursor:'pointer', fontFamily:'inherit' }}>
+                      className="inline-flex items-center justify-center h-8 flex-1 rounded-xl bg-primary text-white text-xs font-bold shadow-sm transition-all hover:bg-primary/90 hover:shadow">
                       ✓ Confirmar
                     </button>
                     <button onClick={() => { if (window.confirm('Marcar como faltou?')) updateStatus(heroAppt.id,'faltou'); }}
-                      style={{ height:32, padding:'0 12px', background:'rgba(255,255,255,0.1)', color:'#FCA5A5', border:'1px solid rgba(255,100,100,0.4)', borderRadius:8, fontSize:11, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>
+                      className="inline-flex items-center justify-center h-8 px-3 rounded-xl border border-red-200 bg-red-50 text-red-600 text-xs font-semibold transition-all hover:bg-red-100">
                       Faltou
                     </button>
                   </>}
                   {heroAppt.status === 'confirmado' && <>
                     <button onClick={() => updateStatus(heroAppt.id,'aguardando')}
-                      style={{ flex:1, height:32, background:'#FBBF24', color:'#fff', border:'none', borderRadius:8, fontSize:12, fontWeight:700, cursor:'pointer', fontFamily:'inherit' }}>
+                      className="inline-flex items-center justify-center h-8 flex-1 rounded-xl bg-warning text-white text-xs font-bold shadow-sm transition-all hover:bg-warning/90 hover:shadow">
                       Check-in na Sala
                     </button>
                     <button onClick={() => { if (window.confirm('Marcar como faltou?')) updateStatus(heroAppt.id,'faltou'); }}
-                      style={{ height:32, padding:'0 12px', background:'rgba(255,255,255,0.1)', color:'#FCA5A5', border:'1px solid rgba(255,100,100,0.4)', borderRadius:8, fontSize:11, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>
+                      className="inline-flex items-center justify-center h-8 px-3 rounded-xl border border-red-200 bg-red-50 text-red-600 text-xs font-semibold transition-all hover:bg-red-100">
                       Faltou
                     </button>
                   </>}
                   {heroAppt.status === 'aguardando' && <>
                     <button onClick={() => updateStatus(heroAppt.id,'em_atendimento')}
-                      style={{ flex:1, height:32, background:'#fff', color:'#1D4ED8', border:'none', borderRadius:8, fontSize:12, fontWeight:700, cursor:'pointer', fontFamily:'inherit' }}>
+                      className="inline-flex items-center justify-center h-8 flex-1 rounded-xl bg-primary text-white text-xs font-bold shadow-sm transition-all hover:bg-primary/90 hover:shadow">
                       ▶ Iniciar Atendimento
                     </button>
                     <button onClick={() => { if (window.confirm('Marcar como faltou?')) updateStatus(heroAppt.id,'faltou'); }}
-                      style={{ height:32, padding:'0 12px', background:'rgba(255,255,255,0.1)', color:'#FCA5A5', border:'1px solid rgba(255,100,100,0.4)', borderRadius:8, fontSize:11, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>
+                      className="inline-flex items-center justify-center h-8 px-3 rounded-xl border border-red-200 bg-red-50 text-red-600 text-xs font-semibold transition-all hover:bg-red-100">
                       Faltou
                     </button>
                   </>}
                   {heroAppt.status === 'em_atendimento' && (
                     <button onClick={() => updateStatus(heroAppt.id,'concluido')}
-                      style={{ flex:1, height:32, background:'#10B981', color:'#fff', border:'none', borderRadius:8, fontSize:12, fontWeight:700, cursor:'pointer', fontFamily:'inherit' }}>
+                      className="inline-flex items-center justify-center h-8 flex-1 rounded-xl bg-success text-white text-xs font-bold shadow-sm transition-all hover:bg-success/90 hover:shadow">
                       ✓ Concluir Atendimento
                     </button>
                   )}
                   {heroAppt.patient_id && (
                     <button onClick={() => onNavigateProntuario?.(heroAppt.patient_id)}
-                      style={{ height:32, padding:'0 12px', background:'rgba(255,255,255,0.12)', color:'#fff', border:'1px solid rgba(255,255,255,0.2)', borderRadius:8, fontSize:11, cursor:'pointer', fontFamily:'inherit' }}>
+                      className="inline-flex items-center justify-center h-8 px-3 rounded-xl border border-border bg-card text-foreground text-xs font-semibold transition-all hover:bg-muted hover:border-primary/40">
                       📋 Prontuário
                     </button>
                   )}
@@ -1041,18 +1041,18 @@ function Dashboard({ onNavigateProntuario, onNewAppointment, onNewPatient, onNav
                 <Calendar size={32} style={{ color:'#CBD5E1' }} />
                 <div className="text-sm font-semibold text-slate-400">Sem atendimentos pendentes</div>
                 <button onClick={onNewAppointment}
-                  style={{ marginTop:4, height:32, padding:'0 16px', background:'#2563EB', color:'#fff', border:'none', borderRadius:8, fontSize:12, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>
+                  className="inline-flex items-center justify-center h-8 px-4 rounded-xl bg-primary text-white text-xs font-bold shadow-sm transition-all hover:bg-primary/90 hover:shadow">
                   + Novo Agendamento
                 </button>
               </div>
             )}
 
             {/* Financeiro resumo */}
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-4">
-              <div className="flex items-center justify-between mb-3">
-                <span className="text-xs font-bold text-slate-700">Financeiro da Semana</span>
+            <div className="rounded-2xl border border-border bg-card shadow-sm overflow-hidden">
+              <div className="flex items-center justify-between px-5 py-3.5 border-b border-border/60">
+                <span className="text-xs font-bold text-foreground uppercase tracking-wide">Financeiro da Semana</span>
                 <button onClick={() => onNavigate?.('financas')}
-                  style={{ fontSize:11, color:'#2563EB', fontWeight:600, background:'transparent', border:'none', cursor:'pointer', fontFamily:'inherit' }}>
+                  className="text-xs font-semibold text-primary hover:text-primary/80 transition-colors">
                   Ver mais →
                 </button>
               </div>
@@ -1094,30 +1094,31 @@ function Dashboard({ onNavigateProntuario, onNewAppointment, onNewPatient, onNav
                   {nowD.toLocaleDateString('pt-BR',{day:'numeric',month:'short'})}
                 </span>
               </div>
-              <div className="flex gap-3 items-center">
+              <div className="flex flex-wrap gap-3 items-center">
                 {[
                   {color:'#10B981',label:'Concluído'},
                   {color:'#7C3AED',label:'Em atend.'},
                   {color:'#D97706',label:'Aguardando'},
                   {color:'#EF4444',label:'Faltou'},
-                ].map((l,i) => (
-                  <div key={i} className="flex items-center gap-1 text-[10px] text-slate-400">
-                    <div className="w-1.5 h-1.5 rounded-full" style={{ background:l.color }} />{l.label}
+                ].map((l) => (
+                  <div key={l.label} className="flex items-center gap-1.5 text-xs text-muted-foreground font-medium">
+                    <div className="w-2 h-2 rounded-full" style={{ background: l.color }} />
+                    {l.label}
                   </div>
                 ))}
               </div>
             </div>
             {appointments.length === 0 ? (
-              <div className="flex-1 flex flex-col items-center justify-center gap-3 py-12 text-center">
-                <Calendar size={36} style={{ color:'#E2E8F0' }} />
-                <div className="text-sm font-medium text-slate-400">Nenhum agendamento hoje</div>
+              <div className="flex flex-col items-center justify-center gap-3 py-12 text-center">
+                <Calendar size={36} className="text-muted-foreground/30" />
+                <div className="text-sm font-medium text-muted-foreground">Nenhum agendamento hoje</div>
                 <button onClick={onNewAppointment}
-                  style={{ height:32, padding:'0 14px', background:'#EFF6FF', color:'#2563EB', border:'1px solid #BFDBFE', borderRadius:8, fontSize:12, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>
-                  + Criar Agendamento
+                  className="inline-flex items-center justify-center h-8 px-4 rounded-xl bg-primary/10 text-primary text-xs font-bold transition-all hover:bg-primary/20">
+                  + Novo Agendamento
                 </button>
               </div>
             ) : (
-              <div style={{ overflowY:'auto', flex:1 }}>
+              <div className="flex-1 overflow-y-auto">
                 {appointments.map((a, i) => {
                   const name = a.patients?.name ?? 'Paciente';
                   const avatarBg  = ['#DBEAFE','#FEF3C7','#F0FDFA','#F3E8FF','#FEE2E2'][i%5];
@@ -1125,56 +1126,49 @@ function Dashboard({ onNavigateProntuario, onNewAppointment, onNewPatient, onNav
                   const isDone = ['concluido','faltou','cancelado'].includes(a.status);
                   const ss = ssMap[a.status] ?? {c:'#9CA3AF', bg:'#F3F4F6', label:a.status};
                   return (
-                    <div key={a.id} style={{
-                      display:'flex', alignItems:'center', gap:10, padding:'10px 20px',
-                      borderBottom: i < appointments.length-1 ? '1px solid #F8FAFC' : 'none',
-                      background: a.status==='em_atendimento' ? '#FAFAFF' : 'transparent',
-                      opacity: isDone ? 0.6 : 1,
-                    }}>
-                      <div style={{ width:40, textAlign:'center', flexShrink:0 }}>
-                        <div style={{ fontSize:13, fontWeight:700, color:isDone?'#9CA3AF':'#111827' }}>{a.start_time?.slice(0,5)}</div>
-                        <div style={{ fontSize:10, color:'#CBD5E1' }}>{a.end_time?.slice(0,5)}</div>
+                    <div key={a.id} className={`
+                      flex items-center gap-3 px-4 py-3 transition-all
+                      ${i < appointments.length-1 ? 'border-b border-border/50' : ''}
+                      ${a.status==='em_atendimento' ? 'bg-primary/5' : 'bg-card'}
+                      ${isDone ? 'opacity-60' : 'opacity-100'}
+                    `}>
+                      <div className="flex w-10 flex-shrink-0 flex-col items-center text-center">
+                        <div className="text-sm font-bold text-foreground">{a.start_time?.slice(0,5)}</div>
+                        <div className="text-[10px] text-muted-foreground">{a.end_time?.slice(0,5)}</div>
                       </div>
-                      <div style={{ width:3, height:38, borderRadius:9999, background:ss.c, flexShrink:0 }} />
-                      <div style={{ width:34, height:34, borderRadius:'50%', background:avatarBg, color:avatarTxt, display:'flex', alignItems:'center', justifyContent:'center', fontSize:12, fontWeight:700, flexShrink:0 }}>
+                      <div className="w-1 flex-shrink-0 self-stretch rounded-full bg-primary/20" />
+                      <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full text-xs font-bold" style={{ background: avatarBg, color: avatarTxt }}>
                         {initials(name)}
                       </div>
-                      <div style={{ flex:1, minWidth:0 }}>
-                        <div style={{ fontSize:13, fontWeight:600, color:'#111827', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{name}</div>
-                        <div style={{ fontSize:11, color:'#9CA3AF', display:'flex', gap:4, alignItems:'center', marginTop:1 }}>
-                          {dTypeLabel[a.type] ?? a.type.replace(/_/g,' ')}
-                          {a.patients?.insurance && <><span>·</span><span>{a.patients.insurance}</span></>}
+                      <div className="flex-1 min-w-0">
+                        <div className="truncate text-sm font-semibold text-foreground">{name}</div>
+                        <div className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground">
+                          <span>{dTypeLabel[a.type] ?? a.type.replace(/_/g,' ')}</span>
+                          {a.patients?.insurance && <><span className="text-muted-foreground/40">·</span><span>{a.patients?.insurance}</span></>}
                         </div>
                       </div>
-                      <span style={{ fontSize:10, fontWeight:600, padding:'2px 8px', background:ss.bg, color:ss.c, borderRadius:20, flexShrink:0, whiteSpace:'nowrap' }}>
+                      <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-bold" style={{ background: statusMeta.bg || '#F1F5F9', color: statusMeta.textColor || '#374151' }}>
+                        <span className="h-1.5 w-1.5 rounded-full" style={{ background: statusMeta.dot || '#64748B' }} />
                         {ss.label}
                       </span>
-                      <div style={{ display:'flex', gap:4, flexShrink:0 }}>
+                      <div className="flex flex-shrink-0 items-center gap-1">
                         {a.status==='agendado' && <>
-                          <button onClick={()=>updateStatus(a.id,'confirmado')}
-                            style={{ height:24, padding:'0 8px', background:'#10B981', color:'#fff', border:'none', borderRadius:5, fontSize:10, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>Confirmar</button>
-                          <button onClick={()=>{ if(window.confirm('Marcar como faltou?')) updateStatus(a.id,'faltou'); }}
-                            style={{ height:24, padding:'0 8px', background:'#EF4444', color:'#fff', border:'none', borderRadius:5, fontSize:10, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>Faltou</button>
+                          <button onClick={()=>updateStatus(a.id,'confirmado')} className="inline-flex h-7 items-center rounded-lg bg-success px-2.5 text-[10px] font-bold text-white shadow-sm transition-all hover:bg-success/90 hover:shadow">Confirmar</button>
+                          <button onClick={()=>{ if(window.confirm('Marcar como faltou?')) updateStatus(a.id,'faltou'); }} className="inline-flex h-7 items-center rounded-lg bg-destructive px-2.5 text-[10px] font-bold text-white shadow-sm transition-all hover:bg-destructive/90">Faltou</button>
                         </>}
                         {a.status==='confirmado' && <>
-                          <button onClick={()=>updateStatus(a.id,'aguardando')}
-                            style={{ height:24, padding:'0 8px', background:'#FBBF24', color:'#fff', border:'none', borderRadius:5, fontSize:10, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>Check-in</button>
-                          <button onClick={()=>{ if(window.confirm('Marcar como faltou?')) updateStatus(a.id,'faltou'); }}
-                            style={{ height:24, padding:'0 8px', background:'#EF4444', color:'#fff', border:'none', borderRadius:5, fontSize:10, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>Faltou</button>
+                          <button onClick={()=>updateStatus(a.id,'aguardando')} className="inline-flex h-7 items-center rounded-lg bg-warning px-2.5 text-[10px] font-bold text-white shadow-sm transition-all hover:bg-warning/90 hover:shadow">Check-in</button>
+                          <button onClick={()=>{ if(window.confirm('Marcar como faltou?')) updateStatus(a.id,'faltou'); }} className="inline-flex h-7 items-center rounded-lg bg-destructive px-2.5 text-[10px] font-bold text-white shadow-sm transition-all hover:bg-destructive/90">Faltou</button>
                         </>}
                         {a.status==='aguardando' && <>
-                          <button onClick={()=>updateStatus(a.id,'em_atendimento')}
-                            style={{ height:24, padding:'0 8px', background:'#2563EB', color:'#fff', border:'none', borderRadius:5, fontSize:10, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>▶ Iniciar</button>
-                          <button onClick={()=>{ if(window.confirm('Marcar como faltou?')) updateStatus(a.id,'faltou'); }}
-                            style={{ height:24, padding:'0 8px', background:'#EF4444', color:'#fff', border:'none', borderRadius:5, fontSize:10, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>Faltou</button>
+                          <button onClick={()=>updateStatus(a.id,'em_atendimento')} className="inline-flex h-7 items-center rounded-lg bg-primary px-2.5 text-[10px] font-bold text-white shadow-sm transition-all hover:bg-primary/90 hover:shadow">▶ Iniciar</button>
+                          <button onClick={()=>{ if(window.confirm('Marcar como faltou?')) updateStatus(a.id,'faltou'); }} className="inline-flex h-7 items-center rounded-lg bg-destructive px-2.5 text-[10px] font-bold text-white shadow-sm transition-all hover:bg-destructive/90">Faltou</button>
                         </>}
                         {a.status==='em_atendimento' && (
-                          <button onClick={()=>updateStatus(a.id,'concluido')}
-                            style={{ height:24, padding:'0 8px', background:'#10B981', color:'#fff', border:'none', borderRadius:5, fontSize:10, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>✓ Concluir</button>
+                          <button onClick={()=>updateStatus(a.id,'concluido')} className="inline-flex h-7 items-center rounded-lg bg-success px-2.5 text-[10px] font-bold text-white shadow-sm transition-all hover:bg-success/90 hover:shadow">✓ Concluir</button>
                         )}
                         {a.patient_id && (
-                          <button onClick={()=>onNavigateProntuario?.(a.patient_id)}
-                            style={{ height:24, padding:'0 8px', background:'#F1F5F9', color:'#374151', border:'none', borderRadius:5, fontSize:10, cursor:'pointer', fontFamily:'inherit' }}>📋</button>
+                          <button onClick={()=>onNavigateProntuario?.(a.patient_id)} className="inline-flex h-7 items-center rounded-lg border border-border bg-muted px-2 text-[10px] font-bold text-foreground transition-all hover:bg-background">📋</button>
                         )}
                       </div>
                     </div>
@@ -5042,9 +5036,7 @@ function EHRAtendimento({ appt, patient: patientProp, onClose }: {
       `}</style>
 
       {/* ══ LEFT SIDEBAR ══ */}
-      <aside style={{ borderRight: '1px solid var(--color-border, #e2e8f0)',
-        background: 'var(--color-card, #fff)', overflowY: 'auto',
-        display: 'flex', flexDirection: 'column' }}>
+      <aside className="border-r border-primary/30 bg-gradient-to-b from-[#6F65E8] via-[#bdb8f4] to-white shadow-2xl" style={{ overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
 
         {/* Back */}
         <div style={{ padding: '12px 14px', flexShrink: 0 }}>

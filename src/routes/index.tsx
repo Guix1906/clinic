@@ -236,21 +236,22 @@ export default function Index() {
     <div className="ehr-shell grid min-h-screen grid-cols-1 bg-muted/40 xl:grid-cols-[205px_minmax(0,1fr)_355px]">
 
       {/* ── Left sidebar ── */}
-      <aside className="border-b border-border bg-muted/65 px-3 py-4 xl:sticky xl:top-0 xl:h-screen xl:border-b-0 xl:border-r">
+      <aside className="premium-sidebar group border-b border-border/60 bg-gradient-to-b from-muted/80 via-muted/60 to-background px-4 py-5 xl:sticky xl:top-0 xl:h-screen xl:border-b-0 xl:border-r">
         <section className="px-2">
-          <div className="mx-auto flex h-[136px] w-[136px] items-center justify-center rounded-full border border-primary/50 bg-card text-muted-foreground">
-            <CircleUserRound className="h-20 w-20" />
+          <div className="mx-auto flex h-[136px] w-[136px] items-center justify-center rounded-full border-2 border-primary/30 bg-gradient-to-br from-primary/5 via-card to-accent/20 shadow-lg transition-transform duration-200 hover:scale-105">
+            <CircleUserRound className="h-20 w-20 text-primary/80" />
           </div>
           <div className="mt-4 text-center">
-            <p className="text-sm font-semibold leading-tight">{selectedPatient.name}</p>
-            <p className="text-xs text-muted-foreground">{selectedPatient.age} Anos e 10 meses</p>
+            <p className="text-base font-bold tracking-tight text-foreground">{selectedPatient.name}</p>
+            <p className="text-sm text-muted-foreground font-medium">{selectedPatient.age} Anos e 10 meses</p>
           </div>
 
           <div className="mt-4 flex flex-col items-center gap-2">
-            <span className={`ehr-status-pill ${statusTone[selectedPatient.status]}`}>
+            <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold uppercase tracking-wide shadow-sm border ${statusTone[selectedPatient.status]}`}>
+              <span className="w-2 h-2 rounded-full bg-current" />
               {selectedPatient.status}
             </span>
-            <button type="button" className="ehr-chip">
+            <button type="button" className="inline-flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-1.5 text-sm font-semibold text-foreground shadow-sm transition-all hover:border-primary/40 hover:shadow hover:bg-muted">
               <Pencil className="h-3.5 w-3.5" />
               Editar
             </button>
@@ -259,16 +260,16 @@ export default function Index() {
           <div className="mt-6 border-t border-border pt-3">
             <p className="text-xs font-semibold text-muted-foreground">Dados do paciente:</p>
             <div className="mt-2 space-y-2 text-sm text-muted-foreground">
-              <p className="flex items-center gap-2">
-                <Phone className="h-4 w-4" />
+              <p className="flex items-center gap-2 text-foreground/80">
+                <Phone className="h-4 w-4 text-primary/70" />
                 {selectedPatient.phone}
               </p>
-              <p className="flex items-center gap-2">
-                <Mail className="h-4 w-4" />
+              <p className="flex items-center gap-2 text-foreground/80">
+                <Mail className="h-4 w-4 text-primary/70" />
                 {selectedPatient.email}
               </p>
-              <p className="flex items-center gap-2">
-                <Stethoscope className="h-4 w-4" />
+              <p className="flex items-center gap-2 text-foreground/80">
+                <Stethoscope className="h-4 w-4 text-primary/70" />
                 {selectedPatient.history}
               </p>
             </div>
@@ -279,15 +280,21 @@ export default function Index() {
       {/* ── Main content ── */}
       <main className="px-4 pb-28 pt-3 lg:px-6">
         {/* Sticky tab header */}
-        <header className="sticky top-0 z-20 bg-muted/40 pb-3 backdrop-blur-sm">
-          <div className="rounded-md border border-border bg-card px-2 py-2">
-            <div className="flex flex-wrap gap-1.5">
+        <header className="sticky top-0 z-20 bg-background/80 pb-3 backdrop-blur-md">
+          <div className="rounded-2xl border border-border bg-card/95 px-4 py-3 shadow-sm">
+            <div className="flex flex-wrap items-center gap-2">
               {tabs.map((tab) => (
                 <button
                   key={tab}
                   type="button"
                   onClick={() => setActiveTab(tab)}
-                  className={`ehr-ref-tab ${activeTab === tab ? "ehr-ref-tab-active" : ""}`}
+                  className={`
+                    inline-flex items-center px-4 py-1.5 rounded-xl text-sm font-semibold transition-all duration-150
+                    ${activeTab === tab
+                      ? 'bg-primary text-white shadow-md'
+                      : 'bg-muted text-muted-foreground hover:text-foreground hover:bg-muted/80'
+                    }
+                  `}
                 >
                   {tab}
                 </button>
@@ -297,20 +304,20 @@ export default function Index() {
         </header>
 
         {/* AI banner */}
-        <section className="ehr-panel overflow-hidden px-0 py-0">
-          <div className="border-b border-info/35 bg-info/10 px-3 py-1 text-center text-sm text-info">
+        <section className="mt-4 overflow-hidden rounded-2xl border border-info/20 bg-gradient-to-r from-info/10 via-info/5 to-transparent shadow-sm">
+          <div className="border-b border-info/20 bg-info/8 px-4 py-2 text-center text-sm font-semibold text-info">
             Você tem 5 usos restantes para testes do Scribe AI da Doctor Assistant!
           </div>
-          <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-2">
-            <span className="inline-flex items-center gap-2 text-sm text-info">
+          <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+            <span className="inline-flex items-center gap-2 text-sm font-semibold text-info">
               <Bot className="h-4 w-4" />
               Assistente de IA
             </span>
             <div className="flex items-center gap-2">
-              <button type="button" className="ehr-action-secondary">
+              <button type="button" className="inline-flex items-center rounded-xl border border-border bg-card px-3 py-1.5 text-sm font-semibold text-foreground shadow-sm transition-all hover:border-primary/40 hover:shadow hover:bg-muted">
                 Generalista
               </button>
-              <button type="button" onClick={aiAssist} className="ehr-action-primary">
+              <button type="button" onClick={aiAssist} className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-1.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-primary/90 hover:shadow-md">
                 <NotebookPen className="h-4 w-4" />
                 Iniciar Registro
               </button>
@@ -319,48 +326,51 @@ export default function Index() {
         </section>
 
         {/* Notes editor */}
-        <section className="ehr-panel mt-4 px-4 py-3">
-          <h1 className="text-lg font-semibold">Registro interno</h1>
-
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <select
-              value={template}
-              onChange={(e) => setTemplate(e.target.value)}
-              className="ehr-input h-10 flex-1"
-            >
-              {templates.map((item) => (
-                <option key={item}>{item}</option>
-              ))}
-            </select>
-            <div className="inline-flex items-center gap-2 rounded-full bg-muted px-3 py-1.5 text-xs text-muted-foreground">
-              <Clock3 className="h-3.5 w-3.5" />
-              {saveLabel}
-            </div>
+        <section className="mt-4 rounded-2xl border border-border bg-card shadow-sm">
+          <div className="px-5 py-4 border-b border-border/60">
+            <h1 className="text-lg font-bold text-foreground">Registro interno</h1>
           </div>
 
-          {/* Snippet chips */}
-          <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            {quickSnippets.map((field) => (
-              <button
-                key={field}
-                type="button"
-                onClick={() => insertSnippet(field)}
-                className="ehr-chip"
+          <div className="p-5 space-y-4">
+            <div className="flex flex-wrap items-center gap-3">
+              <select
+                value={template}
+                onChange={(e) => setTemplate(e.target.value)}
+                className="h-10 flex-1 rounded-xl border border-border bg-background px-4 text-sm font-medium text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-colors"
               >
-                <WandSparkles className="h-3.5 w-3.5" />
-                {field}
-              </button>
-            ))}
-            <button type="button" onClick={() => applyFormat("**")} className="ehr-chip">
-              B
-            </button>
-            <button type="button" onClick={() => applyFormat("_")} className="ehr-chip">
-              I
-            </button>
-          </div>
+                {templates.map((item) => (
+                  <option key={item}>{item}</option>
+                ))}
+              </select>
+              <div className="inline-flex items-center gap-2 rounded-full bg-muted px-3.5 py-1.5 text-xs font-semibold text-muted-foreground">
+                <Clock3 className="h-3.5 w-3.5" />
+                {saveLabel}
+              </div>
+            </div>
 
-          {/* Textarea with floating toolbar */}
-          <div className="ehr-editor-wrap relative mt-3">
+            {/* Snippet chips */}
+            <div className="flex flex-wrap items-center gap-2">
+              {quickSnippets.map((field) => (
+                <button
+                  key={field}
+                  type="button"
+                  onClick={() => insertSnippet(field)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-semibold text-foreground transition-all hover:border-primary/40 hover:bg-muted hover:text-primary"
+                >
+                  <WandSparkles className="h-3.5 w-3.5" />
+                  {field}
+                </button>
+              ))}
+              <button type="button" onClick={() => applyFormat("**")} className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-border bg-background text-xs font-bold text-foreground transition-all hover:border-primary/40 hover:bg-muted">
+                B
+              </button>
+              <button type="button" onClick={() => applyFormat("_")} className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-border bg-background text-xs font-bold text-foreground italic transition-all hover:border-primary/40 hover:bg-muted">
+                I
+              </button>
+            </div>
+
+            {/* Textarea with floating toolbar */}
+            <div className="relative mt-3">
             {selectionActive && (
               <div className="ehr-editor-toolbar absolute left-1/2 top-3 z-10 -translate-x-1/2">
                 <button type="button" onClick={() => applyFormat("**")} className="ehr-chip">
@@ -389,14 +399,14 @@ export default function Index() {
                 setNotes(e.target.value);
                 setSaveState("editing");
               }}
-              className="ehr-note-editor ehr-editor-textarea min-h-[355px]"
+              className="min-h-[355px] w-full rounded-xl border border-border bg-background px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-colors resize-none"
               placeholder="Escolha um modelo de anamnese acima ou digite a sua aqui..."
             />
 
             <button
               type="button"
               onClick={aiAssist}
-              className="ehr-ai-button"
+              className="absolute bottom-4 right-4 inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-white shadow-lg transition-all hover:bg-primary/90 hover:shadow-xl hover:scale-105"
               title="Assistente de IA"
             >
               <Bot className="h-4 w-4" />
