@@ -132,37 +132,43 @@ const DoctorContext = React.createContext<DoctorInfo>({
 });
 
 /* ─────────────────────────────────────────
-   SIDEBAR
+   SIDEBAR — Layout profissional
 ───────────────────────────────────────── */
+const SIDEBAR_WIDTH = 240;
+const SIDEBAR_BG = '#FFFFFF';
+const SIDEBAR_BORDER = '#E5E7EB';
+
 function Sidebar({ active, onNavigate, agendaBadge }: { active: NavId; onNavigate: (id: NavId) => void; agendaBadge: number }) {
   const doctor = React.useContext(DoctorContext);
   return (
-    <aside className="bg-white border-r border-gray-200 shadow-sm" style={{
-      width: 220, display: 'flex', flexDirection: 'column',
-      flexShrink: 0, height: '100%', overflow: 'hidden',
+    <aside style={{
+      width: SIDEBAR_WIDTH, background: SIDEBAR_BG, borderRight: `1px solid ${SIDEBAR_BORDER}`,
+      display: 'flex', flexDirection: 'column', flexShrink: 0, height: '100%', overflow: 'hidden',
     }}>
-      <div style={{ padding: '20px 20px 16px', borderBottom: '1px solid rgba(111,101,232,0.15)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'center' }}>
-          <img src="/logomarca_recortada.png" alt="MedCore" style={{ height: 64, width: 'auto', display: 'block' }} />
+      {/* Logo */}
+      <div style={{ padding: '16px 16px 12px', borderBottom: `1px solid ${SIDEBAR_BORDER}` }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'center' }}>
+          <img src="/logomarca_recortada.png" alt="MedCore" style={{ height: 40, width: 'auto', display: 'block' }} />
         </div>
-        <div style={{ fontSize: 11, color: 'rgba(100,116,139,0.7)', marginTop: 2, fontWeight: 500 }}>Sistema Médico</div>
+        <div style={{ fontSize: 11, color: '#64748B', marginTop: 2, fontWeight: 500, textAlign: 'center' }}>Sistema Médico</div>
       </div>
 
-      <nav style={{ flex: 1, padding: '12px 10px', display: 'flex', flexDirection: 'column', gap: 2, overflowY: 'auto' }}>
+      {/* Navigation */}
+      <nav style={{ flex: 1, padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 1, overflowY: 'auto' }}>
         {NAV_ITEMS.map(item => {
           const isActive = active === item.id;
           const badge = item.id === 'agenda' ? agendaBadge : item.badge;
           return (
             <button key={item.id} onClick={() => onNavigate(item.id)} style={{
-              display: 'flex', alignItems: 'center', gap: 10, padding: '9px 10px',
-              borderRadius: 7, cursor: 'pointer', fontSize: 13, width: '100%',
-              background: isActive ? 'rgba(111,101,232,0.10)' : 'transparent',
-              color: isActive ? '#6F65E8' : '#1E293B',
+              display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px',
+              borderRadius: 8, cursor: 'pointer', fontSize: 13, width: '100%',
+              background: isActive ? '#EFF6FF' : 'transparent',
+              color: isActive ? '#0066D0' : '#374151',
               border: 'none', fontFamily: 'inherit', fontWeight: isActive ? 600 : 500,
-              borderLeft: `3px solid ${isActive ? '#6F65E8' : 'transparent'}`,
-              transition: 'all 0.1s', textAlign: 'left',
+              borderLeft: isActive ? '3px solid #0066D0' : '3px solid transparent',
+              transition: 'all 0.15s ease', textAlign: 'left',
             }}>
-              <Icon name={item.icon} size={15} color={isActive ? '#6F65E8' : '#64748B'} />
+              <Icon name={item.icon} size={18} color={isActive ? '#0066D0' : '#64748B'} />
               <span style={{ flex: 1 }}>{item.label}</span>
               {badge !== undefined && badge > 0 && (
                 <span style={{
@@ -176,25 +182,26 @@ function Sidebar({ active, onNavigate, agendaBadge }: { active: NavId; onNavigat
         })}
       </nav>
 
-      <div style={{ padding: '10px', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+      {/* Footer: suporte + usuário */}
+      <div style={{ padding: '10px', borderTop: `1px solid ${SIDEBAR_BORDER}` }}>
         <button style={{
           display: 'flex', alignItems: 'center', gap: 8, width: '100%',
-          padding: '7px 10px', borderRadius: 7, background: 'none',
-          border: '1px solid rgba(255,255,255,0.1)', cursor: 'pointer',
-          fontSize: 12, color: 'rgba(255,255,255,0.4)', fontFamily: 'inherit', marginBottom: 8,
+          padding: '8px 12px', borderRadius: 8, background: 'none',
+          border: '1px solid #E5E7EB', cursor: 'pointer',
+          fontSize: 12, color: '#64748B', fontFamily: 'inherit', marginBottom: 8,
         }}>
-          <Icon name="help" size={14} color="rgba(255,255,255,0.4)" />
+          <Icon name="help" size={15} color="#64748B" />
           Central de Suporte
         </button>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 8px' }}>
           <div style={{
             width: 32, height: 32, borderRadius: '50%', background: '#0066D0',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             fontSize: 12, fontWeight: 700, color: '#fff', flexShrink: 0,
           }}>{initials(doctor.name)}</div>
           <div>
-            <div style={{ fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>{doctor.name}</div>
-            <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)' }}>{doctor.specialty} · Admin</div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: '#1E293B' }}>{doctor.name}</div>
+            <div style={{ fontSize: 11, color: '#64748B' }}>{doctor.specialty} · Admin</div>
           </div>
         </div>
       </div>
@@ -203,8 +210,14 @@ function Sidebar({ active, onNavigate, agendaBadge }: { active: NavId; onNavigat
 }
 
 /* ─────────────────────────────────────────
-   TOPBAR
+   TOPBAR — Header profissional
 ───────────────────────────────────────── */
+const TOPBAR_HEIGHT = 56;
+const TOPBAR_BG = '#FFFFFF';
+const TOPBAR_BORDER = '#E5E7EB';
+const TOPBAR_INPUT_BG = '#F8FAFC';
+const TOPBAR_INPUT_BORDER = '#E2E8F0';
+
 function Topbar({ screen, notifCount, onNewAppointment, onNewPatient, onNewProfessional, onNewReceptionist }: {
   screen: NavId; notifCount: number;
   onNewAppointment: () => void;
@@ -229,7 +242,7 @@ function Topbar({ screen, notifCount, onNewAppointment, onNewPatient, onNewProfe
 
   return (
     <header style={{
-      height: 52, background: '#fff', borderBottom: '1px solid #E5E7EB',
+      height: TOPBAR_HEIGHT, background: TOPBAR_BG, borderBottom: `1px solid ${TOPBAR_BORDER}`,
       display: 'flex', alignItems: 'center', padding: '0 20px', gap: 16, flexShrink: 0,
     }}>
       <span style={{ fontSize: 13, fontWeight: 500, color: '#374151' }}>{label}</span>
@@ -238,9 +251,9 @@ function Topbar({ screen, notifCount, onNewAppointment, onNewPatient, onNewProfe
           <Icon name="search" size={14} color="#9CA3AF" />
         </div>
         <input placeholder="Buscar paciente, agenda..." style={{
-          width: '100%', height: 34, background: '#F9FAFB', border: '1px solid #E5E7EB',
-          borderRadius: 7, padding: '0 10px 0 32px', fontSize: 13, color: '#374151',
-          fontFamily: 'inherit', outline: 'none',
+          width: '100%', height: 34, background: TOPBAR_INPUT_BG, border: `1px solid ${TOPBAR_INPUT_BORDER}`,
+          borderRadius: 8, padding: '0 10px 0 32px', fontSize: 13, color: '#374151',
+          fontFamily: 'inherit', outline: 'none', transition: 'all 0.15s ease',
         }} />
       </div>
       <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -346,10 +359,8 @@ function Topbar({ screen, notifCount, onNewAppointment, onNewPatient, onNewProfe
 }
 
 /* ─────────────────────────────────────────
-   INTERNAL TABS
+   INTERNAL TABS — Padrão profissional
 ───────────────────────────────────────── */
-interface Tab { id: NavId; label: string; icon: string; closeable: boolean; }
-
 function InternalTabs({ tabs, activeTab, onSelect, onClose }: {
   tabs: Tab[]; activeTab: NavId;
   onSelect: (id: NavId) => void;
@@ -539,13 +550,13 @@ function getBrazilHolidays(year: number): Record<string, string> {
 }
 
 const STATUS_COLORS: Record<string, { bg: string; color: string }> = {
-  agendado:       { bg: '#EFF6FF', color: '#2563EB' },
-  confirmado:     { bg: '#F0FDFA', color: '#0F766E' },
-  aguardando:     { bg: '#FEF3C7', color: '#D97706' },
+  agendado:       { bg: '#EFF6FF', color: '#0066D0' },
+  confirmado:     { bg: '#ECFDF5', color: '#059669' },
+  aguardando:     { bg: '#FFFBEB', color: '#D97706' },
   em_atendimento: { bg: '#F5F3FF', color: '#7C3AED' },
   concluido:      { bg: '#D1FAE5', color: '#10B981' },
-  faltou:         { bg: '#FEE2E2', color: '#EF4444' },
-  cancelado:      { bg: '#F3F4F6', color: '#9CA3AF' },
+  faltou:         { bg: '#FEF2F2', color: '#EF4444' },
+  cancelado:      { bg: '#F3F4F6', color: '#6B7280' },
 };
 
 function statusBadge(s: string) {
@@ -574,7 +585,7 @@ function KpiCard({ label, value, sub, trend, trendVal, color, icon }: {
   color: KpiColor; icon: React.ReactNode;
 }) {
   const cm: Record<KpiColor,{bar:string; iconWrap:string; trendCls:string}> = {
-    blue:    { bar:'bg-blue-500',    iconWrap:'bg-blue-50 text-blue-600',    trendCls:'bg-blue-50 text-blue-700'    },
+    blue:    { bar:'bg-[#0066D0]', iconWrap:'bg-[#EFF6FF] text-[#0066D0]', trendCls:'bg-[#EFF6FF] text-[#0066D0]' },
     emerald: { bar:'bg-emerald-500', iconWrap:'bg-emerald-50 text-emerald-600', trendCls:'bg-emerald-50 text-emerald-700' },
     violet:  { bar:'bg-violet-500',  iconWrap:'bg-violet-50 text-violet-600', trendCls:'bg-violet-50 text-violet-700' },
     rose:    { bar:'bg-rose-500',    iconWrap:'bg-rose-50 text-rose-600',    trendCls:'bg-rose-50 text-rose-700'    },
@@ -582,12 +593,12 @@ function KpiCard({ label, value, sub, trend, trendVal, color, icon }: {
   const c = cm[color];
   const TrendIcon = trend === 'up' ? TrendingUp : trend === 'down' ? TrendingDown : Minus;
   return (
-    <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden flex flex-col">
+    <div className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden flex flex-col">
       <div className={`h-1 w-full ${c.bar}`} />
       <div className="p-5 flex flex-col gap-3 flex-1">
         <div className="flex items-start justify-between">
           <span className="text-[10px] font-bold text-slate-400 tracking-widest uppercase leading-tight">{label}</span>
-          <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${c.iconWrap}`}>{icon}</div>
+          <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${c.iconWrap}`}>{icon}</div>
         </div>
         <div className="text-[2rem] font-extrabold text-slate-900 leading-none tracking-tight">{value}</div>
         <div className="flex items-center justify-between mt-auto">
@@ -815,13 +826,13 @@ function Dashboard({ onNavigateProntuario, onNewAppointment, onNewPatient, onNav
   })();
 
   const ssMap: Record<string,{c:string;bg:string;label:string}> = {
-    agendado:      {c:'#2563EB', bg:'#EFF6FF', label:'Agendado'},
-    confirmado:    {c:'#0F766E', bg:'#F0FDFA', label:'Confirmado'},
-    aguardando:    {c:'#D97706', bg:'#FEF3C7', label:'Aguardando'},
+    agendado:      {c:'#0066D0', bg:'#EFF6FF', label:'Agendado'},
+    confirmado:    {c:'#059669', bg:'#ECFDF5', label:'Confirmado'},
+    aguardando:    {c:'#D97706', bg:'#FFFBEB', label:'Aguardando'},
     em_atendimento:{c:'#7C3AED', bg:'#F5F3FF', label:'Em atend.'},
     concluido:     {c:'#10B981', bg:'#D1FAE5', label:'Concluído'},
-    faltou:        {c:'#EF4444', bg:'#FEE2E2', label:'Faltou'},
-    cancelado:     {c:'#9CA3AF', bg:'#F3F4F6', label:'Cancelado'},
+    faltou:        {c:'#EF4444', bg:'#FEF2F2', label:'Faltou'},
+    cancelado:     {c:'#6B7280', bg:'#F3F4F6', label:'Cancelado'},
   };
 
   return (

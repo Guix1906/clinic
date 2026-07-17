@@ -153,20 +153,20 @@ export default function CalendarGrid({
       <DragOverlay dropAnimation={null}>
         {activeAppt && (
           <div style={{
-            background: '#DBEAFE',
-            border: '2px dashed #3B82F6',
-            borderRadius: 6,
-            padding: '4px 8px',
+            background: '#EFF6FF',
+            border: '2px dashed #0066D0',
+            borderRadius: 8,
+            padding: '6px 10px',
             width: colW - 4,
-            minHeight: 36,
-            opacity: 0.85,
-            boxShadow: '0 8px 24px rgba(59,130,246,.3)',
+            minHeight: 40,
+            opacity: 0.9,
+            boxShadow: '0 8px 24px rgba(0,102,208,.25)',
             pointerEvents: 'none',
           }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: '#1D4ED8' }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#0066D0' }}>
               {activeAppt.patient_name}
             </div>
-            <div style={{ fontSize: 10, color: '#3B82F6' }}>
+            <div style={{ fontSize: 11, color: '#0066D0', opacity: 0.8 }}>
               {activeAppt.start_time}–{activeAppt.end_time}
             </div>
           </div>

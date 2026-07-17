@@ -5,20 +5,20 @@
   /* ─── Font ────────────────────────────────────── */
   --font-sans: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif;
 
-  /* ─── Base palette (PageCloner) ──────────────── */
-  --color-background:         #F8F9FB;
+  /* ─── Base palette (ClinicMed Premium) ───────── */
+  --color-background:         #F8FAFC;
   --color-foreground:         #0F172A;
   --color-card:               #FFFFFF;
   --color-muted:              #F1F5F9;
   --color-muted-foreground:   #64748B;
   --color-border:             #E2E8F0;
 
-  /* ─── Brand ──────────────────────────────────── */
-  --color-primary:            #6F65E8;
-  --color-primary-200:        #BDB8F4;
+  /* ─── Brand (azul MedCore, consistente com header/botões) ── */
+  --color-primary:            #0066D0;
+  --color-primary-200:        #BFDBFE;
   --color-primary-foreground: #FFFFFF;
-  --color-accent:             #F0F4FF;
-  --color-accent-foreground:  #1D4ED8;
+  --color-accent:             #EFF6FF;
+  --color-accent-foreground:  #0066D0;
 
   /* ─── Semantic ───────────────────────────────── */
   --color-destructive:        #EF4444;
@@ -67,14 +67,14 @@ body {
 
 /* ─── Appointment block hover effects ──────────── */
 .appt-block {
-  transition: box-shadow .15s, background .12s;
+  transition: box-shadow .15s ease, background .12s ease;
 }
 .appt-block:hover {
   box-shadow: 0 3px 12px rgba(0,0,0,.18) !important;
   z-index: 20 !important;
 }
 .appt-block .appt-type {
-  transition: opacity .12s;
+  transition: opacity .12s ease;
 }
 .appt-block:hover .appt-type {
   opacity: 0 !important;
@@ -82,14 +82,14 @@ body {
 .appt-block .appt-status {
   opacity: 0;
   transform: translateY(2px);
-  transition: opacity .15s, transform .15s;
+  transition: opacity .15s ease, transform .15s ease;
 }
 .appt-block:hover .appt-status {
   opacity: 1 !important;
   transform: translateY(0) !important;
 }
 .appt-block .appt-dot {
-  transition: box-shadow .15s;
+  transition: box-shadow .15s ease;
 }
 .appt-block:hover .appt-dot {
   box-shadow: 0 0 0 3px var(--status-color-faded) !important;
@@ -109,3 +109,20 @@ body {
     max-width: none !important;
   }
 }
+
+/* ─── Premium focus ring ───────────────────────── */
+:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--color-background), 0 0 0 4px var(--color-primary-200);
+  border-radius: 8px;
+}
+
+/* ─── Reduced motion ───────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+

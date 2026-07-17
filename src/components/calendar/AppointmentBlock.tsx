@@ -133,10 +133,10 @@ export default function AppointmentBlock({
           width: columnWidth - 4,
           height: heightPx,
           background: meta.bg,
-          border: `1.5px solid ${meta.color}33`,
+          border: `1px solid ${meta.color}33`,
           borderLeft: `3px solid ${dotColor}`,
-          borderRadius: 6,
-          padding: '3px 6px',
+          borderRadius: 8,
+          padding: '4px 8px',
           cursor: isDragging ? 'grabbing' : 'grab',
           opacity: isDragging ? 0.45 : 1,
           boxShadow: isDragging
@@ -146,7 +146,7 @@ export default function AppointmentBlock({
           zIndex: isDragging ? 999 : 10,
           transform: CSS.Translate.toString(transform),
           userSelect: 'none',
-          transition: 'box-shadow .15s',
+          transition: 'box-shadow .15s ease',
         }}
         {...listeners}
         {...attributes}
@@ -158,7 +158,7 @@ export default function AppointmentBlock({
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           <span style={{ width: 6, height: 6, borderRadius: '50%', flexShrink: 0, background: dotColor }} />
           <span style={{
-            fontSize: compact ? 10 : 11, fontWeight: 700, color: meta.color,
+            fontSize: compact ? 11 : 12, fontWeight: 700, color: meta.color,
             overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', flex: 1,
           }}>
             {appt.patient_name}
@@ -168,14 +168,14 @@ export default function AppointmentBlock({
         {/* Horário + tipo */}
         {!compact && (
           <>
-            <div style={{ fontSize: 10, color: meta.color + 'CC', marginTop: 1, overflow: 'hidden', whiteSpace: 'nowrap' }}>
+            <div style={{ fontSize: 11, color: meta.color + 'CC', marginTop: 1, overflow: 'hidden', whiteSpace: 'nowrap' }}>
               {appt.start_time}–{displayEnd}
               {dur >= 60
                 ? ` · ${Math.floor(dur / 60)}h${dur % 60 ? dur % 60 + 'min' : ''}`
                 : ` · ${dur}min`}
             </div>
             <div style={{
-              fontSize: 10, color: '#6B7280', marginTop: 1,
+              fontSize: 11, color: '#64748B', marginTop: 1,
               overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
             }}>
               {meta.label}{appt.insurance ? ` · ${appt.insurance}` : ''}
@@ -188,8 +188,8 @@ export default function AppointmentBlock({
           onMouseDown={onResizeMouseDown}
           style={{
             position: 'absolute', bottom: 0, left: 0, right: 0, height: 8,
-            cursor: 'ns-resize', background: `${meta.color}22`,
-            borderRadius: '0 0 5px 5px',
+            cursor: 'ns-resize', background: `${meta.color}18`,
+            borderRadius: '0 0 6px 6px',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
           }}
           onClick={e => e.stopPropagation()}
